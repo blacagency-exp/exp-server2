@@ -1,8 +1,6 @@
 require("dotenv").config()
 const express = require("express")
 const cors = require("cors")
-const fs = require("fs")
-const path = require("path")
 const axios = require("axios")
 const { createClient } = require("@supabase/supabase-js")
 
@@ -32,19 +30,7 @@ if (!PAYSTACK_SECRET_KEY || !PAYSTACK_SECRET_KEY.startsWith("sk_")) {
 
 if (!supabaseUrl || !supabaseKey) {
   console.error("Missing Supabase credentials. Please check your .env file.")
-  
   process.exit(1)
-}
-
-const dataDir = path.join(__dirname, "data")
-const subscribersFile = path.join(dataDir, "subscribers.json")
-
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true })
-}
-
-if (!fs.existsSync(subscribersFile)) {
-  fs.writeFileSync(subscribersFile, "[]", "utf-8")
 }
 
 app.post("/api/subscribe", async (req, res) => {
@@ -90,7 +76,6 @@ app.post("/api/subscribe", async (req, res) => {
   }
 })
 
-// New endpoint to retrieve all subscribers
 app.get("/api/subscribers", async (req, res) => {
   try {
     const { data, error } = await supabase.from("subscribers").select("*").order("created_at", { ascending: false })
@@ -215,11 +200,4 @@ app.get("/api/test-supabase", async (req, res) => {
   }
 })
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`)
-  console.log("PAYSTACK_SECRET_KEY is set and valid")
-  console.log("Supabase connection is set up")
-})
-
-
-
+module.exports = app
