@@ -185,6 +185,7 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
 })
 
 // Test Supabase connection
+// added new
 app.get("/api/test-supabase", async (req, res) => {
   try {
     const { data, error } = await supabase.from("bookings").select("*").limit(1)
