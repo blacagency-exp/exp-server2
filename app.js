@@ -104,7 +104,21 @@ app.post("/api/initialize-payment", async (req, res) => {
       {
         email,
         amount: Math.round(amount * 100), // Convert to kobo and ensure it's an integer
-        metadata,
+        metadata: {
+          ...metadata,
+          custom_fields: [
+            {
+              display_name: "Full Name",
+              variable_name: "full_name",
+              value: `${metadata.firstName} ${metadata.lastName}`
+            },
+            {
+              display_name: "Phone Number",
+              variable_name: "phone_number",
+              value: metadata.phoneNumber
+            }
+          ]
+        },
       },
       {
         headers: {
