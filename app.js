@@ -104,21 +104,7 @@ app.post("/api/initialize-payment", async (req, res) => {
       {
         email,
         amount: Math.round(amount * 100), // Convert to kobo and ensure it's an integer
-        metadata: {
-          ...metadata,
-          custom_fields: [
-            {
-              display_name: "Full Name",
-              variable_name: "full_name",
-              value: `${metadata.firstName} ${metadata.lastName}`
-            },
-            {
-              display_name: "Phone Number",
-              variable_name: "phone_number",
-              value: metadata.phoneNumber
-            }
-          ]
-        },
+        metadata,
       },
       {
         headers: {
@@ -136,13 +122,13 @@ app.post("/api/initialize-payment", async (req, res) => {
       amount,
       payment_reference: response.data.data.reference,
       payment_status: "pending",
-      first_name: metadata.firstName,
-      last_name: metadata.lastName,
-      phone_number: metadata.phoneNumber,
-      package_type: metadata.packageType,
-      traveler_type: metadata.travelerType,
-      group_size: metadata.groupSize,
-      specific_requests: metadata.specificRequests,
+      first_name: metadata.full_name.split(" ")[0],
+      last_name: metadata.full_name.split(" ")[1],
+      phone_number: metadata.phone_number,
+      package_type: metadata.package_type,
+      traveler_type: metadata.traveler_type,
+      group_size: metadata.group_size,
+      specific_requests: metadata.specific_requests,
     }
 
     console.log("Attempting to save booking data to Supabase:", bookingData)
@@ -182,17 +168,17 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
     let bookingStatus
 
     switch (paymentStatus) {
-      case 'success':
-        bookingStatus = 'completed'
+      case "success":
+        bookingStatus = "completed"
         break
-      case 'failed':
-        bookingStatus = 'failed'
+      case "failed":
+        bookingStatus = "failed"
         break
-      case 'abandoned':
-        bookingStatus = 'abandoned'
+      case "abandoned":
+        bookingStatus = "abandoned"
         break
       default:
-        bookingStatus = 'pending'
+        bookingStatus = "pending"
     }
 
     // Update booking status in Supabase
@@ -208,10 +194,10 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
       console.log("Booking status updated successfully:", data)
     }
 
-    res.json({ 
-      status: bookingStatus, 
+    res.json({
+      status: bookingStatus,
       message: `Payment ${bookingStatus}`,
-      paymentDetails: response.data.data
+      paymentDetails: response.data.data,
     })
   } catch (error) {
     console.error("Payment verification failed:", error.response ? error.response.data : error.message)
@@ -238,3 +224,4 @@ app.get("/api/test-supabase", async (req, res) => {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
+
