@@ -162,12 +162,29 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
       },
     })
 
-    console.log("Paystack API verification response:", response.data)
+    console.log("Paystack API verification response:", JSON.stringify(response.data, null, 2))
+
+    const paymentStatus = response.data.data.status
+    let bookingStatus
+
+    switch (paymentStatus) {
+      case 'success':
+        bookingStatus = 'completed'
+        break
+      case 'failed':
+        bookingStatus = 'failed'
+        break
+      case 'abandoned':
+        bookingStatus = 'abandoned'
+        break
+      default:
+        bookingStatus = 'pending'
+    }
 
     // Update booking status in Supabase
     const { data, error } = await supabase
       .from("bookings")
-      .update({ payment_status: response.data.data.status })
+      .update({ payment_status: bookingStatus })
       .eq("payment_reference", reference)
 
     if (error) {
@@ -177,7 +194,11 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
       console.log("Booking status updated successfully:", data)
     }
 
-    res.json(response.data)
+    res.json({ 
+      status: bookingStatus, 
+      message: `Payment ${bookingStatus}`,
+      paymentDetails: response.data.data
+    })
   } catch (error) {
     console.error("Payment verification failed:", error.response ? error.response.data : error.message)
     res.status(500).json({ error: "Failed to verify payment", details: error.message })
@@ -185,7 +206,6 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
 })
 
 // Test Supabase connection
-// added new
 app.get("/api/test-supabase", async (req, res) => {
   try {
     const { data, error } = await supabase.from("bookings").select("*").limit(1)
@@ -201,4 +221,6 @@ app.get("/api/test-supabase", async (req, res) => {
   }
 })
 
-module.exports = app
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`)
+})
