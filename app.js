@@ -104,7 +104,12 @@ app.post("/api/initialize-payment", async (req, res) => {
       {
         email,
         amount: Math.round(amount * 100), // Convert to kobo and ensure it's an integer
-        metadata,
+        name, // Send to Paystack's name parameter
+        phone,
+        metadata: {
+          ...metadata,
+          internal_id: "YOUR_INTERNAL_ID", // Add any additional metadata
+        },
       },
       {
         headers: {
