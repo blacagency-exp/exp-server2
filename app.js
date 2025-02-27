@@ -95,9 +95,9 @@ app.get("/api/subscribers", async (req, res) => {
 
 app.post("/api/initialize-payment", async (req, res) => {
   try {
-    const { email, amount, metadata } = req.body
+    const { email, amount, metadata, name, phone } = req.body
 
-    console.log("Received payment initialization request:", { email, amount, metadata })
+    console.log("Received payment initialization request:", { email, amount, metadata, name, phone })
 
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
