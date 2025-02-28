@@ -312,8 +312,9 @@ app.get("/api/test-supabase", async (req, res) => {
 async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   // Create email transporter
   const transporter = nodemailer.createTransport({
-    // Your email service configuration
-    service: 'gmail',
+    host: process.env.EMAIL_HOST,
+    port: process.env.EMAIL_PORT,
+    secure: true, // true for port 465
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD,
@@ -381,7 +382,7 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   
   // Send customer receipt
   await transporter.sendMail({
-    from: '"Your Travel Agency" <your-email@example.com>',
+    from: '"Your Travel Agency" <bookings@experienceplateau.com>',
     to: booking.email,
     subject: 'Your Booking Receipt',
     html: customerHtml,
@@ -389,8 +390,8 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   
   // Send admin receipt
   await transporter.sendMail({
-    from: '"Booking System" <your-email@example.com>',
-    to: 'admin@youremail.com', // Your admin email
+    from: '"Booking System" <bookings@experienceplateau.com>',
+    to: 'bookings@experienceplateau.com', // Your admin email
     subject: `New Booking: ${booking.first_name} ${booking.last_name}`,
     html: adminHtml,
   });
