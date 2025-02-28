@@ -344,6 +344,7 @@ app.get("/api/test-supabase", async (req, res) => {
 async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   // Format date
   const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString();
+  const testRecipient = 'bookings@experienceplateau.com'; 
   
   // Customer receipt HTML (your existing template)
   const customerHtml = `
@@ -405,7 +406,7 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
     // Send customer receipt
     await client.sendEmail({
       From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
-      To: booking.email,
+      To: testRecipient,
       Subject: 'Your Booking Receipt',
       HtmlBody: customerHtml,
       MessageStream: 'outbound'
