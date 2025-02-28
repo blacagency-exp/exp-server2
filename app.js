@@ -7,6 +7,8 @@ const { createClient } = require("@supabase/supabase-js")
 const app = express()
 const port = process.env.PORT || 5000
 
+const nodemailer = require('nodemailer'); 
+
 app.use(cors())
 app.use(express.json())
 
@@ -93,11 +95,63 @@ app.get("/api/subscribers", async (req, res) => {
   }
 })
 
+// Add this new endpoint to create a customer on Paystack
+app.post("/api/create-customer", async (req, res) => {
+  try {
+    const { email, first_name, last_name, phone } = req.body;
+
+    const response = await axios.post(
+      `${PAYSTACK_BASE_URL}/customer`,
+      {
+        email,
+        first_name,
+        last_name,
+        phone
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("Customer created on Paystack:", response.data);
+    res.json(response.data);
+  } catch (error) {
+    console.error("Customer creation failed:", error.response ? error.response.data : error.message);
+    res.status(500).json({ error: "Failed to create customer", details: error.message });
+  }
+});
+
 app.post("/api/initialize-payment", async (req, res) => {
   try {
     const { email, amount, metadata, name, phone } = req.body
 
     console.log("Received payment initialization request:", { email, amount, metadata, name, phone })
+
+
+    try {
+      const customerResponse = await axios.post(
+        `${PAYSTACK_BASE_URL}/customer`,
+        {
+          email,
+          first_name: metadata.full_name.split(" ")[0],
+          last_name: metadata.full_name.split(" ")[1],
+          phone: metadata.phone_number
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log("Customer created/updated on Paystack:", customerResponse.data);
+    } catch (customerError) {
+      // Log the error but continue with payment initialization
+      console.error("Customer creation failed:", customerError.response ? customerError.response.data : customerError.message);
+    }
 
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
@@ -186,11 +240,39 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
         bookingStatus = "pending"
     }
 
+  
+
     // Update booking status in Supabase
     const { data, error } = await supabase
       .from("bookings")
       .update({ payment_status: bookingStatus })
       .eq("payment_reference", reference)
+
+
+      if (paymentStatus === "success") {
+        // Get full booking details from database
+        const { data: bookingData, error: bookingError } = await supabase
+          .from("bookings")
+          .select("*")
+          .eq("payment_reference", reference)
+          .single();
+  
+          if (bookingError) throw bookingError;
+  
+                // Generate receipt number
+        const receiptNumber = `RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        
+
+         // Update booking with receipt number
+      await supabase
+      .from("bookings")
+      .update({ receipt_number: receiptNumber })
+      .eq("payment_reference", reference);
+
+       // Send receipt emails
+       await sendReceiptEmails(bookingData, receiptNumber, response.data.data);
+        
+        }
 
     if (error) {
       console.error("Error updating booking status in Supabase:", error)
@@ -225,6 +307,94 @@ app.get("/api/test-supabase", async (req, res) => {
     res.status(500).json({ error: "Failed to connect to Supabase", details: error.message })
   }
 })
+
+// Function to send receipt emails
+async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
+  // Create email transporter
+  const transporter = nodemailer.createTransport({
+    // Your email service configuration
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+  });
+  
+  // Format date
+  const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString();
+  
+  // Customer receipt
+  const customerHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: #5A8E00;">Payment Receipt</h1>
+        <p>Receipt #: ${receiptNumber}</p>
+      </div>
+      
+      <div style="margin-bottom: 20px;">
+        <h2>Booking Details</h2>
+        <p><strong>Name:</strong> ${booking.first_name} ${booking.last_name}</p>
+        <p><strong>Email:</strong> ${booking.email}</p>
+        <p><strong>Phone:</strong> ${booking.phone_number}</p>
+        <p><strong>Date:</strong> ${paymentDate}</p>
+        <p><strong>Package:</strong> ${booking.package_type}</p>
+        <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
+        ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+        <p><strong>Amount Paid:</strong> ₦${(booking.amount).toLocaleString()}</p>
+        <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
+      </div>
+      
+      <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; text-align: center;">
+        <p>Thank you for booking with us! We're excited to help you explore Plateau State.</p>
+        <p>If you have any questions, please contact us at support@youremail.com</p>
+      </div>
+    </div>
+  `;
+  
+  // Admin receipt (more detailed)
+  const adminHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <h1 style="color: #5A8E00;">New Booking Notification</h1>
+      <p>Receipt #: ${receiptNumber}</p>
+      <p>A new booking has been completed with the following details:</p>
+      
+      <h2>Customer Information</h2>
+      <p><strong>Name:</strong> ${booking.first_name} ${booking.last_name}</p>
+      <p><strong>Email:</strong> ${booking.email}</p>
+      <p><strong>Phone:</strong> ${booking.phone_number}</p>
+      
+      <h2>Booking Details</h2>
+      <p><strong>Package:</strong> ${booking.package_type}</p>
+      <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
+      ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+      <p><strong>Specific Requests:</strong> ${booking.specific_requests}</p>
+      
+      <h2>Payment Information</h2>
+      <p><strong>Amount:</strong> ₦${(booking.amount).toLocaleString()}</p>
+      <p><strong>Payment Date:</strong> ${paymentDate}</p>
+      <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
+      <p><strong>Payment Status:</strong> ${booking.payment_status}</p>
+      <p><strong>Payment Channel:</strong> ${paymentDetails.channel || 'N/A'}</p>
+      <p><strong>Payment Method:</strong> ${paymentDetails.authorization?.card_type || 'N/A'}</p>
+    </div>
+  `;
+  
+  // Send customer receipt
+  await transporter.sendMail({
+    from: '"Your Travel Agency" <your-email@example.com>',
+    to: booking.email,
+    subject: 'Your Booking Receipt',
+    html: customerHtml,
+  });
+  
+  // Send admin receipt
+  await transporter.sendMail({
+    from: '"Booking System" <your-email@example.com>',
+    to: 'admin@youremail.com', // Your admin email
+    subject: `New Booking: ${booking.first_name} ${booking.last_name}`,
+    html: adminHtml,
+  });
+}
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
