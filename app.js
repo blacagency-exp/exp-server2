@@ -208,6 +208,21 @@ app.post("/api/initialize-payment", async (req, res) => {
   }
 })
 
+app.get('/test-email', async (req, res) => {
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM,
+      to: 'your@personal.email',
+      subject: 'SMTP Test',
+      text: 'This is a test email from your server'
+    });
+    res.send('Email sent successfully');
+  } catch (error) {
+    console.error('Email test failed:', error);
+    res.status(500).send(`Error: ${error.message}`);
+  }
+});
+
 app.get("/api/verify-payment/:reference", async (req, res) => {
   try {
     const { reference } = req.params
@@ -314,11 +329,16 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT,
-    secure: true, // true for port 465
+    secure: true,
     auth: {
       user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
+      pass: process.env.EMAIL_PASSWORD
     },
+    tls: {
+      servername: 'server289.web-hosting.com', // 👈 Match certificate CN
+      rejectUnauthorized: true // Keep SSL validation but fix certificate match
+    },
+    logger: true
   });
   
   // Format date
