@@ -3,6 +3,7 @@ const express = require("express")
 const cors = require("cors")
 const axios = require("axios")
 const { createClient } = require("@supabase/supabase-js")
+const postmark = require('postmark');
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -14,6 +15,8 @@ app.use(express.json())
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 const PAYSTACK_BASE_URL = "https://api.paystack.co"
+// Create a client instance with your server token
+const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
 
 // Test route
 app.get("/", (req, res) => {
@@ -208,15 +211,28 @@ app.post("/api/initialize-payment", async (req, res) => {
   }
 })
 
-app.get('/test-email', async (req, res) => {
+app.get('/test-email-postmark', async (req, res) => {
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to: 'your@personal.email',
-      subject: 'SMTP Test',
-      text: 'This is a test email from your server'
-    });
-    res.send('Email sent successfully');
+    const testBooking = {
+      first_name: 'Test',
+      last_name: 'User',
+      email: 'bookings@experienceplateau.com', // Use your email for testing
+      phone_number: '1234567890',
+      package_type: 'Premium Tour',
+      traveler_type: 'Individual',
+      amount: 25000,
+      payment_reference: 'TEST-REF-123',
+      payment_status: 'completed',
+      specific_requests: 'None'
+    };
+    
+    await sendReceiptEmails(
+      testBooking, 
+      'TEST-RCP-123', 
+      { paid_at: new Date(), channel: 'card' }
+    );
+    
+    res.send('Test email sent successfully via Postmark');
   } catch (error) {
     console.error('Email test failed:', error);
     res.status(500).send(`Error: ${error.message}`);
@@ -324,27 +340,12 @@ app.get("/api/test-supabase", async (req, res) => {
 })
 
 // Function to send receipt emails
+// Replace your existing sendReceiptEmails function with this:
 async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
-  // Create email transporter
-  const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    },
-    tls: {
-      servername: 'server289.web-hosting.com', // 👈 Match certificate CN
-      rejectUnauthorized: true // Keep SSL validation but fix certificate match
-    },
-    logger: true
-  });
-  
   // Format date
   const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString();
   
-  // Customer receipt
+  // Customer receipt HTML (your existing template)
   const customerHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
       <div style="text-align: center; margin-bottom: 20px;">
@@ -367,12 +368,12 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
       
       <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; text-align: center;">
         <p>Thank you for booking with us! We're excited to help you explore Plateau State.</p>
-        <p>If you have any questions, please contact us at support@youremail.com</p>
+        <p>If you have any questions, please contact us at support@experienceplateau.com</p>
       </div>
     </div>
   `;
   
-  // Admin receipt (more detailed)
+  // Admin receipt HTML (your existing template)
   const adminHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
       <h1 style="color: #5A8E00;">New Booking Notification</h1>
@@ -400,21 +401,30 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
     </div>
   `;
   
-  // Send customer receipt
-  await transporter.sendMail({
-    from: '"Your Travel Agency" <bookings@experienceplateau.com>',
-    to: booking.email,
-    subject: 'Your Booking Receipt',
-    html: customerHtml,
-  });
-  
-  // Send admin receipt
-  await transporter.sendMail({
-    from: '"Booking System" <bookings@experienceplateau.com>',
-    to: 'bookings@experienceplateau.com', // Your admin email
-    subject: `New Booking: ${booking.first_name} ${booking.last_name}`,
-    html: adminHtml,
-  });
+  try {
+    // Send customer receipt
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
+      To: booking.email,
+      Subject: 'Your Booking Receipt',
+      HtmlBody: customerHtml,
+      MessageStream: 'outbound'
+    });
+    
+    // Send admin notification
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
+      To: process.env.ADMIN_EMAIL || 'bookings@experienceplateau.com',
+      Subject: `New Booking: ${booking.first_name} ${booking.last_name}`,
+      HtmlBody: adminHtml,
+      MessageStream: 'outbound'
+    });
+    
+    console.log('Receipt emails sent successfully via Postmark');
+  } catch (error) {
+    console.error('Error sending receipt emails:', error);
+    // Continue execution even if email fails
+  }
 }
 
 app.listen(port, () => {
