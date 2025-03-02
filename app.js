@@ -191,6 +191,7 @@ app.post("/api/initialize-payment", async (req, res) => {
       traveler_type: metadata.traveler_type,
       group_size: metadata.group_size,
       specific_requests: metadata.specific_requests,
+      guide_id: metadata.guide_id, 
     }
 
     console.log("Attempting to save booking data to Supabase:", bookingData)
@@ -302,6 +303,11 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
 
        // Send receipt emails
        await sendReceiptEmails(bookingData, receiptNumber, response.data.data);
+
+       // If a guide was selected, send notification to the guide
+      if (bookingData.guide_id) {
+        await sendGuideNotification(bookingData, receiptNumber);
+      }
         
         }
 
@@ -323,6 +329,23 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
   }
 })
 
+// Define a GET endpoint to retrieve guides
+app.get("/api/guides", async (req, res) => {
+  try {
+    const { data, error } = await supabase.from("guides").select("*");
+
+    if (error) {
+      console.error("Error fetching guides:", error);
+      return res.status(500).json({ error: "Failed to fetch guides" });
+    }
+
+    res.json(data);
+  } catch (error) {
+    console.error("Unexpected error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Test Supabase connection
 app.get("/api/test-supabase", async (req, res) => {
   try {
@@ -338,6 +361,73 @@ app.get("/api/test-supabase", async (req, res) => {
     res.status(500).json({ error: "Failed to connect to Supabase", details: error.message })
   }
 })
+
+// Add a function to send guide notification emails
+async function sendGuideNotification(booking, receiptNumber) {
+  try {
+    // Get guide information from your database
+    const { data: guideData, error: guideError } = await supabase
+      .from("guides")
+      .select("*")
+      .eq("id", booking.guide_id)
+      .single();
+    
+    if (guideError) {
+      console.error("Error fetching guide data:", guideError);
+      return;
+    }
+
+    // Format date
+    const bookingDate = new Date().toLocaleDateString();
+    
+    // Guide notification HTML template
+    const guideHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h1 style="color: #5A8E00;">New Tour Assignment</h1>
+        </div>
+        
+        <p>Hello ${guideData.name},</p>
+        
+        <p>You have been selected as a guide for an upcoming tour. Here are the details:</p>
+        
+        <div style="margin-bottom: 20px;">
+          <h2>Customer Information</h2>
+          <p><strong>Name:</strong> ${booking.first_name} ${booking.last_name}</p>
+          <p><strong>Email:</strong> ${booking.email}</p>
+          <p><strong>Phone:</strong> ${booking.phone_number}</p>
+          
+          <h2>Booking Details</h2>
+          <p><strong>Package:</strong> ${booking.package_type}</p>
+          <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
+          ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+          <p><strong>Receipt Number:</strong> ${receiptNumber}</p>
+          <p><strong>Booking Date:</strong> ${bookingDate}</p>
+          <p><strong>Specific Requests:</strong> ${booking.specific_requests || 'None'}</p>
+        </div>
+        
+        <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px;">
+          <p>Please contact the customer within 24 hours to discuss the details of their tour.</p>
+          <p>If you have any questions, please contact our booking team at bookings@experienceplateau.com</p>
+        </div>
+      </div>
+    `;
+    
+    // Send email to guide
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
+      To: guideData.email || 'bookings@experienceplateau.com', // In production, use the actual guide email
+      Subject: `New Tour Assignment: ${booking.first_name} ${booking.last_name}`,
+      HtmlBody: guideHtml,
+      MessageStream: 'outbound'
+    });
+    
+    console.log(`Guide notification email sent to ${guideData.name} (${guideData.email})`);
+  } catch (error) {
+    console.error('Error sending guide notification email:', error);
+    // Continue execution even if email fails
+  }
+}
 
 // Function to send receipt emails
 // Replace your existing sendReceiptEmails function with this:
