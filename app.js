@@ -416,7 +416,7 @@ async function sendGuideNotification(booking, receiptNumber) {
     // Send email to guide
     await client.sendEmail({
       From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
-      To: 'nyoriwanger09@gmail.com' || 'bookings@experienceplateau.com', // In production, use the actual guide email
+      To: guideData.email || 'bookings@experienceplateau.com', // In production, use the actual guide email
       Subject: `New Tour Assignment: ${booking.first_name} ${booking.last_name}`,
       HtmlBody: guideHtml,
       MessageStream: 'outbound'
@@ -434,7 +434,7 @@ async function sendGuideNotification(booking, receiptNumber) {
 async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   // Format date
   const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString();
-  const testRecipient = 'bookings@experienceplateau.com'; 
+  const testRecipient = booking.email; 
   
   // Customer receipt HTML (your existing template)
   const customerHtml = `
