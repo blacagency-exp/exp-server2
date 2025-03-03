@@ -416,7 +416,7 @@ async function sendGuideNotification(booking, receiptNumber) {
     // Send email to guide
     await client.sendEmail({
       From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
-      To: guideData.email || 'bookings@experienceplateau.com', // In production, use the actual guide email
+      To: 'nyoriwanger09@gmail.com' || 'bookings@experienceplateau.com', // In production, use the actual guide email
       Subject: `New Tour Assignment: ${booking.first_name} ${booking.last_name}`,
       HtmlBody: guideHtml,
       MessageStream: 'outbound'
