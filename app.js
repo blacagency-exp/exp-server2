@@ -518,6 +518,37 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   }
 }
 
+// Add this new endpoint to handle contact form submissions
+
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { firstName, lastName, email, comment } = req.body
+
+    console.log("Received contact form submission:", { firstName, lastName, email, comment })
+
+    // Insert contact form data into Supabase
+    const { data, error } = await supabase.from("contact_submissions").insert([
+      {
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        comment,
+      },
+    ])
+
+    if (error) {
+      console.error("Error saving contact form submission to Supabase:", error)
+      return res.status(500).json({ message: "Failed to save contact form submission", error: error })
+    }
+
+    console.log("Contact form submission saved successfully:", data)
+    res.status(200).json({ message: "Contact form submission successful" })
+  } catch (error) {
+    console.error("Unexpected error during contact form submission:", error)
+    res.status(500).json({ message: "Internal server error", error: error.message })
+  }
+})
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
