@@ -452,9 +452,24 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
         <p><strong>Date:</strong> ${paymentDate}</p>
         <p><strong>Package:</strong> ${booking.package_type}</p>
         <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
-        ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+        ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ""}
         <p><strong>Amount Paid:</strong> ₦${(booking.amount).toLocaleString()}</p>
         <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
+      </div>
+      
+      <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; border-left: 4px solid #5A8E00;">
+        <h2 style="color: #5A8E00; margin-top: 0;">What Happens Next?</h2>
+        <ol style="padding-left: 20px;">
+          <li style="margin-bottom: 10px;"><strong>Tour Guide Contact:</strong> A tour guide will contact you within 24 hours to discuss your tour details and answer any questions.</li>
+          <li style="margin-bottom: 10px;"><strong>Tour Confirmation:</strong> Your guide will confirm the date, time, and meeting location for your tour.</li>
+          <li style="margin-bottom: 10px;"><strong>Preparation:</strong> Your guide will provide information about what to bring and how to prepare for your tour experience.</li>
+        </ol>
+        <p><strong>Need immediate assistance?</strong> Contact our support team:</p>
+        <ul style="list-style-type: none; padding-left: 0;">
+          <li>📞 Phone: +234 XXX XXX XXXX</li>
+          <li>✉️ Email: support@experienceplateau.com</li>
+          <li>⏰ Support Hours: Monday-Friday, 9am-5pm</li>
+        </ul>
       </div>
       
       <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; text-align: center;">
