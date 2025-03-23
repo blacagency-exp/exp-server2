@@ -4,6 +4,10 @@ const cors = require("cors")
 const axios = require("axios")
 const { createClient } = require("@supabase/supabase-js")
 const postmark = require('postmark');
+const fs = require("fs")
+const path = require("path")
+const https = require("https")
+const http = require("http")
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -600,17 +604,59 @@ app.get('/api/tours/:id', async (req, res) => {
 });
 
 app.get("/video", async (req, res) => {
-  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4";
+  // For testing purposes, we'll use a sample video URL
+  // In production, replace with your actual video URL
+  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
+
   try {
-    const response = await axios.get(videoUrl, { responseType: "stream" });
-    response.data.pipe(res);
+    // Set proper CORS headers
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range")
+
+    // Set content type for video
+    res.setHeader("Content-Type", "video/mp4")
+
+    // Create a request to the video source
+    const protocol = videoUrl.startsWith("https") ? https : http
+
+    protocol
+      .get(videoUrl, (videoResponse) => {
+        // Check if video source is available
+        if (videoResponse.statusCode !== 200) {
+          console.error(`Video source returned status code: ${videoResponse.statusCode}`)
+          return res.status(videoResponse.statusCode).send("Video source unavailable")
+        }
+
+        // Forward content headers
+        res.setHeader("Content-Length", videoResponse.headers["content-length"] || "")
+        res.setHeader("Accept-Ranges", "bytes")
+
+        // Pipe the video stream to the response
+        videoResponse.pipe(res)
+
+        // Handle errors in the video stream
+        videoResponse.on("error", (err) => {
+          console.error("Error in video stream:", err)
+          if (!res.headersSent) {
+            res.status(500).send("Error streaming video")
+          }
+        })
+      })
+      .on("error", (err) => {
+        console.error("Error fetching video:", err)
+        res.status(500).send("Failed to fetch video")
+      })
   } catch (error) {
-    console.error("Error fetching video:", error);
-    res.status(500).send("Failed to fetch video");
+    console.error("Error in video endpoint:", error)
+    res.status(500).send("Failed to process video request")
   }
-});
+})
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
+
+// Test the endpoint
+console.log("Video endpoint available at: http://localhost:" + port + "/video")
 
