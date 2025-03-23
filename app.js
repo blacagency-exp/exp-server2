@@ -604,7 +604,7 @@ app.get('/api/tours/:id', async (req, res) => {
 });
 
 app.get("/video", async (req, res) => {
-  // Google Drive file ID - use the same one you're already using
+  // Google Drive file ID
   const fileId = "1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
 
   try {
@@ -618,41 +618,81 @@ app.get("/video", async (req, res) => {
     // Set content type for video
     res.setHeader("Content-Type", "video/mp4")
 
-    // Use a direct download link format that works better
-    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+    // Try a different approach to get Google Drive files
+    // This uses a direct download link that might work better
+    const directUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
 
-    console.log("Fetching video from:", directUrl)
+    // Check if we have an API key (optional but helps with rate limits)
+    const apiKey = process.env.GOOGLE_API_KEY
+    const urlWithKey = apiKey ? `${directUrl}&key=${apiKey}` : directUrl
 
-    // Use axios to handle redirects automatically
-    const response = await axios({
-      method: "get",
-      url: directUrl,
-      responseType: "stream",
-      maxRedirects: 5, // Allow multiple redirects
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    })
+    console.log("Fetching video from Google Drive")
 
-    // Forward content headers if available
-    if (response.headers["content-length"]) {
-      res.setHeader("Content-Length", response.headers["content-length"])
-    }
+    try {
+      // Use axios to handle redirects automatically
+      const response = await axios({
+        method: "get",
+        url: urlWithKey,
+        responseType: "stream",
+        maxRedirects: 5, // Allow multiple redirects
+        timeout: 30000, // 30 second timeout
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        },
+      })
 
-    // Enable range requests
-    res.setHeader("Accept-Ranges", "bytes")
-
-    // Pipe the video stream to the response
-    response.data.pipe(res)
-
-    // Handle errors in the video stream
-    response.data.on("error", (err) => {
-      console.error("Error in video stream:", err)
-      if (!res.headersSent) {
-        res.status(500).send("Error streaming video")
+      // Forward content headers if available
+      if (response.headers["content-length"]) {
+        res.setHeader("Content-Length", response.headers["content-length"])
       }
-    })
+
+      // Enable range requests
+      res.setHeader("Accept-Ranges", "bytes")
+
+      // Pipe the video stream to the response
+      response.data.pipe(res)
+
+      // Handle errors in the video stream
+      response.data.on("error", (err) => {
+        console.error("Error in video stream:", err)
+        if (!res.headersSent) {
+          res.status(500).send("Error streaming video")
+        }
+      })
+    } catch (axiosError) {
+      console.error("Error fetching from Google Drive API:", axiosError.message)
+
+      // Fall back to the original method if the API approach fails
+      console.log("Falling back to direct download link")
+      const fallbackUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+
+      const fallbackResponse = await axios({
+        method: "get",
+        url: fallbackUrl,
+        responseType: "stream",
+        maxRedirects: 5,
+        timeout: 30000,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        },
+      })
+
+      if (fallbackResponse.headers["content-length"]) {
+        res.setHeader("Content-Length", fallbackResponse.headers["content-length"])
+      }
+
+      res.setHeader("Accept-Ranges", "bytes")
+      fallbackResponse.data.pipe(res)
+
+      fallbackResponse.data.on("error", (err) => {
+        console.error("Error in fallback video stream:", err)
+        if (!res.headersSent) {
+          res.status(500).send("Error streaming video")
+        }
+      })
+    }
   } catch (error) {
     console.error("Error in video endpoint:", error)
     res.status(500).send("Failed to process video request")
