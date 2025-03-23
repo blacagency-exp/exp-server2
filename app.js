@@ -604,11 +604,12 @@ app.get('/api/tours/:id', async (req, res) => {
 });
 
 app.get("/video", async (req, res) => {
-  // For testing purposes, we'll use a sample video URL
-  // In production, replace with your actual video URL
-  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
+  // Google Drive file ID - use the same one you're already using
+  const fileId = "1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
 
   try {
+    console.log("Video request received")
+
     // Set proper CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -617,38 +618,82 @@ app.get("/video", async (req, res) => {
     // Set content type for video
     res.setHeader("Content-Type", "video/mp4")
 
-    // Create a request to the video source
-    const protocol = videoUrl.startsWith("https") ? https : http
+    // Use a direct download link format that works better
+    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
 
-    protocol
-      .get(videoUrl, (videoResponse) => {
-        // Check if video source is available
-        if (videoResponse.statusCode !== 200) {
-          console.error(`Video source returned status code: ${videoResponse.statusCode}`)
-          return res.status(videoResponse.statusCode).send("Video source unavailable")
-        }
+    console.log("Fetching video from:", directUrl)
 
-        // Forward content headers
-        res.setHeader("Content-Length", videoResponse.headers["content-length"] || "")
-        res.setHeader("Accept-Ranges", "bytes")
+    // Use axios to handle redirects automatically
+    const response = await axios({
+      method: "get",
+      url: directUrl,
+      responseType: "stream",
+      maxRedirects: 5, // Allow multiple redirects
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      },
+    })
 
-        // Pipe the video stream to the response
-        videoResponse.pipe(res)
+    // Forward content headers if available
+    if (response.headers["content-length"]) {
+      res.setHeader("Content-Length", response.headers["content-length"])
+    }
 
-        // Handle errors in the video stream
-        videoResponse.on("error", (err) => {
-          console.error("Error in video stream:", err)
-          if (!res.headersSent) {
-            res.status(500).send("Error streaming video")
-          }
-        })
-      })
-      .on("error", (err) => {
-        console.error("Error fetching video:", err)
-        res.status(500).send("Failed to fetch video")
-      })
+    // Enable range requests
+    res.setHeader("Accept-Ranges", "bytes")
+
+    // Pipe the video stream to the response
+    response.data.pipe(res)
+
+    // Handle errors in the video stream
+    response.data.on("error", (err) => {
+      console.error("Error in video stream:", err)
+      if (!res.headersSent) {
+        res.status(500).send("Error streaming video")
+      }
+    })
   } catch (error) {
     console.error("Error in video endpoint:", error)
+    res.status(500).send("Failed to process video request")
+  }
+})
+
+// ADD this new endpoint for fallback
+app.get("/video-alt", async (req, res) => {
+  const fileId = "1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
+
+  try {
+    // Set CORS headers
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Content-Type", "text/html")
+
+    // Use the Google Drive embed format which is more reliable for streaming
+    const embedUrl = `https://drive.google.com/file/d/${fileId}/preview`
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>360° Video Viewer</title>
+        <style>
+          body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+          iframe { width: 100%; height: 100%; border: 0; }
+          .info { position: absolute; bottom: 20px; left: 20px; color: white; background: rgba(0,0,0,0.7); 
+                  padding: 10px; border-radius: 5px; font-family: Arial, sans-serif; }
+        </style>
+      </head>
+      <body>
+        <iframe src="${embedUrl}" allowfullscreen></iframe>
+        <div class="info">
+          <h3>Experience Plateau 360° Video</h3>
+          <p>Use your mouse or touch to look around the 360° environment.</p>
+        </div>
+      </body>
+      </html>
+    `)
+  } catch (error) {
+    console.error("Error in video-alt endpoint:", error)
     res.status(500).send("Failed to process video request")
   }
 })
