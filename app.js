@@ -604,139 +604,18 @@ app.get('/api/tours/:id', async (req, res) => {
 });
 
 app.get("/video", async (req, res) => {
-  // Google Drive file ID
-  const fileId = "1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
-
+  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4";
   try {
-    console.log("Video request received")
-
-    // Set proper CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range")
-
-    // Set content type for video
-    res.setHeader("Content-Type", "video/mp4")
-
-    // Try a different approach to get Google Drive files
-    // This uses a direct download link that might work better
-    const directUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
-
-    // Check if we have an API key (optional but helps with rate limits)
-    const apiKey = process.env.GOOGLE_API_KEY
-    const urlWithKey = apiKey ? `${directUrl}&key=${apiKey}` : directUrl
-
-    console.log("Fetching video from Google Drive")
-
-    try {
-      // Use axios to handle redirects automatically
-      const response = await axios({
-        method: "get",
-        url: urlWithKey,
-        responseType: "stream",
-        maxRedirects: 5, // Allow multiple redirects
-        timeout: 30000, // 30 second timeout
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      })
-
-      // Forward content headers if available
-      if (response.headers["content-length"]) {
-        res.setHeader("Content-Length", response.headers["content-length"])
-      }
-
-      // Enable range requests
-      res.setHeader("Accept-Ranges", "bytes")
-
-      // Pipe the video stream to the response
-      response.data.pipe(res)
-
-      // Handle errors in the video stream
-      response.data.on("error", (err) => {
-        console.error("Error in video stream:", err)
-        if (!res.headersSent) {
-          res.status(500).send("Error streaming video")
-        }
-      })
-    } catch (axiosError) {
-      console.error("Error fetching from Google Drive API:", axiosError.message)
-
-      // Fall back to the original method if the API approach fails
-      console.log("Falling back to direct download link")
-      const fallbackUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
-
-      const fallbackResponse = await axios({
-        method: "get",
-        url: fallbackUrl,
-        responseType: "stream",
-        maxRedirects: 5,
-        timeout: 30000,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        },
-      })
-
-      if (fallbackResponse.headers["content-length"]) {
-        res.setHeader("Content-Length", fallbackResponse.headers["content-length"])
-      }
-
-      res.setHeader("Accept-Ranges", "bytes")
-      fallbackResponse.data.pipe(res)
-
-      fallbackResponse.data.on("error", (err) => {
-        console.error("Error in fallback video stream:", err)
-        if (!res.headersSent) {
-          res.status(500).send("Error streaming video")
-        }
-      })
-    }
+    const response = await axios.get(videoUrl, { responseType: "stream" });
+    res.setHeader("Content-Type", "video/mp4"); // Set the correct MIME type
+    response.data.pipe(res);
   } catch (error) {
-    console.error("Error in video endpoint:", error)
-    res.status(500).send("Failed to process video request")
+    console.error("Error fetching video:", error);
+    res.status(500).send("Failed to fetch video");
   }
-})
+});
 
 // ADD this new endpoint for fallback
-app.get("/video-alt", async (req, res) => {
-  const fileId = "1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
-
-  try {
-    // Set CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Content-Type", "text/html")
-
-    // Use the Google Drive embed format which is more reliable for streaming
-    const embedUrl = `https://drive.google.com/file/d/${fileId}/preview`
-
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>360° Video Viewer</title>
-        <style>
-          body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
-          iframe { width: 100%; height: 100%; border: 0; }
-          .info { position: absolute; bottom: 20px; left: 20px; color: white; background: rgba(0,0,0,0.7); 
-                  padding: 10px; border-radius: 5px; font-family: Arial, sans-serif; }
-        </style>
-      </head>
-      <body>
-        <iframe src="${embedUrl}" allowfullscreen></iframe>
-        <div class="info">
-          <h3>Experience Plateau 360° Video</h3>
-          <p>Use your mouse or touch to look around the 360° environment.</p>
-        </div>
-      </body>
-      </html>
-    `)
-  } catch (error) {
-    console.error("Error in video-alt endpoint:", error)
-    res.status(500).send("Failed to process video request")
-  }
-})
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
