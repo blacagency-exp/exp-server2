@@ -564,6 +564,52 @@ app.post("/api/contact", async (req, res) => {
   }
 })
 
+// Get all tours
+app.get('/api/tours', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('tours')
+      .select('*');
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching tours:', error);
+    res.status(500).json({ error: 'Failed to fetch tours' });
+  }
+});
+
+// Get specific tour data
+app.get('/api/tours/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('tours')
+      .select('*, virtual_tours(*)')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching tour:', error);
+    res.status(500).json({ error: 'Failed to fetch tour' });
+  }
+});
+
+app.get("/video", async (req, res) => {
+  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4";
+  try {
+    const response = await axios.get(videoUrl, { responseType: "stream" });
+    response.data.pipe(res);
+  } catch (error) {
+    console.error("Error fetching video:", error);
+    res.status(500).send("Failed to fetch video");
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
