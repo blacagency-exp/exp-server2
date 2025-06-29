@@ -615,6 +615,401 @@ app.get("/video", async (req, res) => {
   }
 });
 
+// Generate access code
+function generateAccessCode() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  let result = ""
+  for (let i = 0; i < 12; i++) {
+    if (i > 0 && i % 4 === 0) result += "-"
+    result += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return result
+}
+
+// Initialize virtual tour payment
+app.post("/api/initialize-virtual-tour-payment", async (req, res) => {
+  try {
+    const { email, amount, tourId, tourName, firstName, lastName, phoneNumber, metadata } = req.body
+
+    console.log("Received virtual tour payment initialization:", {
+      email,
+      amount,
+      tourId,
+      tourName,
+      firstName,
+      lastName,
+      phoneNumber,
+    })
+
+    // Create customer on Paystack
+    try {
+      const customerResponse = await axios.post(
+        `${PAYSTACK_BASE_URL}/customer`,
+        {
+          email,
+          first_name: firstName,
+          last_name: lastName,
+          phone: phoneNumber,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        },
+      )
+      console.log("Customer created/updated on Paystack:", customerResponse.data)
+    } catch (customerError) {
+      console.error(
+        "Customer creation failed:",
+        customerError.response ? customerError.response.data : customerError.message,
+      )
+    }
+
+    // Initialize payment with Paystack
+    const response = await axios.post(
+      `${PAYSTACK_BASE_URL}/transaction/initialize`,
+      {
+        email,
+        amount: Math.round(amount * 100), // Convert to kobo
+        metadata: {
+          ...metadata,
+          payment_type: "virtual_tour",
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    )
+
+    console.log("Paystack API response:", response.data)
+
+    // Generate access code
+    const accessCode = generateAccessCode()
+
+    // Save payment details to Supabase
+    const paymentData = {
+      email,
+      first_name: firstName,
+      last_name: lastName,
+      phone_number: phoneNumber,
+      tour_id: tourId,
+      tour_name: tourName,
+      amount,
+      payment_reference: response.data.data.reference,
+      payment_status: "pending",
+      access_code: accessCode,
+      access_code_used: false,
+    }
+
+    console.log("Attempting to save virtual tour payment to Supabase:", paymentData)
+
+    const { data, error } = await supabase.from("virtual_tour_payments").insert([paymentData])
+
+    if (error) {
+      console.error("Error saving virtual tour payment to Supabase:", error)
+      throw new Error(`Failed to save payment: ${error.message}`)
+    }
+
+    console.log("Virtual tour payment saved successfully:", data)
+    res.json(response.data)
+  } catch (error) {
+    console.error("Virtual tour payment initialization failed:", error.response ? error.response.data : error.message)
+    res.status(500).json({
+      error: "Failed to initialize virtual tour payment",
+      details: error.message,
+    })
+  }
+})
+
+// Verify virtual tour payment
+app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
+  try {
+    const { reference } = req.params
+    console.log("Received virtual tour payment verification for reference:", reference)
+
+    // Verify payment with Paystack
+    const response = await axios.get(`${PAYSTACK_BASE_URL}/transaction/verify/${reference}`, {
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+    })
+
+    console.log("Paystack verification response:", JSON.stringify(response.data, null, 2))
+
+    const paymentStatus = response.data.data.status
+    let bookingStatus
+
+    switch (paymentStatus) {
+      case "success":
+        bookingStatus = "completed"
+        break
+      case "failed":
+        bookingStatus = "failed"
+        break
+      case "abandoned":
+        bookingStatus = "abandoned"
+        break
+      default:
+        bookingStatus = "pending"
+    }
+
+    // Update payment status in Supabase
+    const { data: updateData, error: updateError } = await supabase
+      .from("virtual_tour_payments")
+      .update({ payment_status: bookingStatus })
+      .eq("payment_reference", reference)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error("Error updating virtual tour payment status:", updateError)
+      throw new Error(`Failed to update payment status: ${updateError.message}`)
+    }
+
+    if (paymentStatus === "success") {
+      // Generate receipt number
+      const receiptNumber = `VT-RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+
+      // Update with receipt number
+      await supabase
+        .from("virtual_tour_payments")
+        .update({ receipt_number: receiptNumber })
+        .eq("payment_reference", reference)
+
+      // Grant user access
+      await supabase.from("user_tour_access").upsert({
+        email: updateData.email,
+        tour_id: updateData.tour_id,
+        access_code: updateData.access_code,
+        granted_at: new Date().toISOString(),
+        expires_at: null, // No expiration for now
+      })
+
+      // Send access code email
+      await sendVirtualTourAccessEmail(updateData, receiptNumber, response.data.data)
+
+      res.json({
+        status: bookingStatus,
+        message: `Payment ${bookingStatus}`,
+        accessCode: updateData.access_code,
+        paymentDetails: response.data.data,
+      })
+    } else {
+      res.json({
+        status: bookingStatus,
+        message: `Payment ${bookingStatus}`,
+        paymentDetails: response.data.data,
+      })
+    }
+  } catch (error) {
+    console.error("Virtual tour payment verification failed:", error.response ? error.response.data : error.message)
+    res.status(500).json({
+      error: "Failed to verify virtual tour payment",
+      details: error.message,
+    })
+  }
+})
+
+// Verify access code
+app.post("/api/verify-access-code", async (req, res) => {
+  try {
+    const { accessCode, tourId } = req.body
+
+    console.log("Verifying access code:", { accessCode, tourId })
+
+    // Check if access code exists and is valid
+    const { data, error } = await supabase
+      .from("virtual_tour_payments")
+      .select("*")
+      .eq("access_code", accessCode)
+      .eq("tour_id", tourId)
+      .eq("payment_status", "completed")
+      .single()
+
+    if (error || !data) {
+      console.log("Invalid access code:", error)
+      return res.json({
+        success: false,
+        message: "Invalid access code or tour not found",
+      })
+    }
+
+    // Mark access code as used (optional)
+    await supabase.from("virtual_tour_payments").update({ access_code_used: true }).eq("access_code", accessCode)
+
+    // Grant user access if not already granted
+    await supabase.from("user_tour_access").upsert({
+      email: data.email,
+      tour_id: tourId,
+      access_code: accessCode,
+      granted_at: new Date().toISOString(),
+      expires_at: null,
+    })
+
+    res.json({
+      success: true,
+      message: "Access granted successfully",
+    })
+  } catch (error) {
+    console.error("Access code verification failed:", error)
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify access code",
+    })
+  }
+})
+
+// Check user access
+app.post("/api/check-user-access", async (req, res) => {
+  try {
+    const { email, tourIds } = req.body
+
+    if (!email || !tourIds || !Array.isArray(tourIds)) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and tourIds array are required",
+      })
+    }
+
+    const { data, error } = await supabase
+      .from("user_tour_access")
+      .select("tour_id")
+      .eq("email", email)
+      .in("tour_id", tourIds)
+
+    if (error) {
+      console.error("Error checking user access:", error)
+      return res.status(500).json({
+        success: false,
+        message: "Failed to check user access",
+      })
+    }
+
+    res.json({
+      success: true,
+      access: data || [],
+    })
+  } catch (error) {
+    console.error("Check user access failed:", error)
+    res.status(500).json({
+      success: false,
+      message: "Failed to check user access",
+    })
+  }
+})
+
+// Function to send virtual tour access email
+async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails) {
+  const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString()
+
+  // Customer access email HTML
+  const customerHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: #5A8E00;">Virtual Tour Access Granted!</h1>
+        <p>Receipt #: ${receiptNumber}</p>
+      </div>
+      
+      <div style="background-color: #97E12B; background-opacity: 0.1; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center;">
+        <h2 style="color: #1A2E0D; margin-top: 0;">Your Access Code</h2>
+        <div style="background-color: white; padding: 15px; border-radius: 8px; margin: 10px 0;">
+          <span style="font-family: monospace; font-size: 24px; font-weight: bold; color: #5A8E00; letter-spacing: 2px;">
+            ${payment.access_code}
+          </span>
+        </div>
+        <p style="color: #1A2E0D; margin-bottom: 0;">
+          Use this code to access your virtual tour anytime
+        </p>
+      </div>
+      
+      <div style="margin-bottom: 20px;">
+        <h2>Tour Details</h2>
+        <p><strong>Tour:</strong> ${payment.tour_name}</p>
+        <p><strong>Name:</strong> ${payment.first_name} ${payment.last_name}</p>
+        <p><strong>Email:</strong> ${payment.email}</p>
+        <p><strong>Purchase Date:</strong> ${paymentDate}</p>
+        <p><strong>Amount Paid:</strong> ₦${payment.amount.toLocaleString()}</p>
+        <p><strong>Payment Reference:</strong> ${payment.payment_reference}</p>
+      </div>
+      
+      <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; border-left: 4px solid #5A8E00;">
+        <h2 style="color: #5A8E00; margin-top: 0;">How to Access Your Tour</h2>
+        <ol style="padding-left: 20px;">
+          <li style="margin-bottom: 10px;">Visit our virtual tour page</li>
+          <li style="margin-bottom: 10px;">Click on "${payment.tour_name}"</li>
+          <li style="margin-bottom: 10px;">Enter your access code: <strong>${payment.access_code}</strong></li>
+          <li style="margin-bottom: 10px;">Enjoy your immersive virtual tour experience!</li>
+        </ol>
+        
+        <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border-radius: 5px;">
+          <p style="margin: 0; color: #856404;">
+            <strong>💡 Pro Tip:</strong> Save this email for future reference. Your access code never expires!
+          </p>
+        </div>
+      </div>
+      
+      <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; text-align: center;">
+        <p>Thank you for choosing our virtual tour experience!</p>
+        <p>If you have any questions, please contact us at support@experienceplateau.com</p>
+      </div>
+    </div>
+  `
+
+  // Admin notification HTML
+  const adminHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <h1 style="color: #5A8E00;">New Virtual Tour Purchase</h1>
+      <p>Receipt #: ${receiptNumber}</p>
+      
+      <h2>Customer Information</h2>
+      <p><strong>Name:</strong> ${payment.first_name} ${payment.last_name}</p>
+      <p><strong>Email:</strong> ${payment.email}</p>
+      <p><strong>Phone:</strong> ${payment.phone_number}</p>
+      
+      <h2>Tour Details</h2>
+      <p><strong>Tour:</strong> ${payment.tour_name} (ID: ${payment.tour_id})</p>
+      <p><strong>Access Code:</strong> ${payment.access_code}</p>
+      
+      <h2>Payment Information</h2>
+      <p><strong>Amount:</strong> ₦${payment.amount.toLocaleString()}</p>
+      <p><strong>Payment Date:</strong> ${paymentDate}</p>
+      <p><strong>Payment Reference:</strong> ${payment.payment_reference}</p>
+      <p><strong>Payment Status:</strong> ${payment.payment_status}</p>
+      <p><strong>Payment Channel:</strong> ${paymentDetails.channel || "N/A"}</p>
+    </div>
+  `
+
+  try {
+    // Send customer access email
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: payment.email,
+      Subject: `Your Virtual Tour Access Code - ${payment.tour_name}`,
+      HtmlBody: customerHtml,
+      MessageStream: "outbound",
+    })
+
+    // Send admin notification
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: process.env.ADMIN_EMAIL || "bookings@experienceplateau.com",
+      Subject: `New Virtual Tour Purchase: ${payment.tour_name}`,
+      HtmlBody: adminHtml,
+      MessageStream: "outbound",
+    })
+
+    console.log("Virtual tour access emails sent successfully")
+  } catch (error) {
+    console.error("Error sending virtual tour access emails:", error)
+  }
+}
+
+
 // ADD this new endpoint for fallback
 
 app.listen(port, () => {
