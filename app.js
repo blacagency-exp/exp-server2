@@ -3,24 +3,23 @@ const express = require("express")
 const cors = require("cors")
 const axios = require("axios")
 const { createClient } = require("@supabase/supabase-js")
-const postmark = require('postmark');
+const postmark = require("postmark")
 const fs = require("fs")
 const path = require("path")
 const https = require("https")
 const http = require("http")
-
 const app = express()
 const port = process.env.PORT || 5000
-
-const nodemailer = require('nodemailer'); 
+const nodemailer = require("nodemailer")
 
 app.use(cors())
 app.use(express.json())
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 const PAYSTACK_BASE_URL = "https://api.paystack.co"
+
 // Create a client instance with your server token
-const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
+const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN)
 
 // Test route
 app.get("/", (req, res) => {
@@ -42,9 +41,23 @@ if (!supabaseUrl || !supabaseKey) {
   process.exit(1)
 }
 
+// Helper function to calculate 24-hour expiration
+function get24HourExpiration() {
+  const now = new Date()
+  const expiration = new Date(now.getTime() + 24 * 60 * 60 * 1000) // Add 24 hours
+  return expiration.toISOString()
+}
+
+// Helper function to check if access has expired
+function isAccessExpired(expiresAt) {
+  if (!expiresAt) return false
+  const now = new Date()
+  const expiration = new Date(expiresAt)
+  return now > expiration
+}
+
 app.post("/api/subscribe", async (req, res) => {
   const { email } = req.body
-
   console.log("Received subscription request for email:", email)
 
   if (!email || !/\S+@\S+\.\S+/.test(email)) {
@@ -105,38 +118,35 @@ app.get("/api/subscribers", async (req, res) => {
 // Add this new endpoint to create a customer on Paystack
 app.post("/api/create-customer", async (req, res) => {
   try {
-    const { email, first_name, last_name, phone } = req.body;
-
+    const { email, first_name, last_name, phone } = req.body
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/customer`,
       {
         email,
         first_name,
         last_name,
-        phone
+        phone,
       },
       {
         headers: {
           Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
           "Content-Type": "application/json",
         },
-      }
-    );
+      },
+    )
 
-    console.log("Customer created on Paystack:", response.data);
-    res.json(response.data);
+    console.log("Customer created on Paystack:", response.data)
+    res.json(response.data)
   } catch (error) {
-    console.error("Customer creation failed:", error.response ? error.response.data : error.message);
-    res.status(500).json({ error: "Failed to create customer", details: error.message });
+    console.error("Customer creation failed:", error.response ? error.response.data : error.message)
+    res.status(500).json({ error: "Failed to create customer", details: error.message })
   }
-});
+})
 
 app.post("/api/initialize-payment", async (req, res) => {
   try {
     const { email, amount, metadata, name, phone } = req.body
-
     console.log("Received payment initialization request:", { email, amount, metadata, name, phone })
-
 
     try {
       const customerResponse = await axios.post(
@@ -145,19 +155,22 @@ app.post("/api/initialize-payment", async (req, res) => {
           email,
           first_name: metadata.full_name.split(" ")[0],
           last_name: metadata.full_name.split(" ")[1],
-          phone: metadata.phone_number
+          phone: metadata.phone_number,
         },
         {
           headers: {
             Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
             "Content-Type": "application/json",
           },
-        }
-      );
-      console.log("Customer created/updated on Paystack:", customerResponse.data);
+        },
+      )
+      console.log("Customer created/updated on Paystack:", customerResponse.data)
     } catch (customerError) {
       // Log the error but continue with payment initialization
-      console.error("Customer creation failed:", customerError.response ? customerError.response.data : customerError.message);
+      console.error(
+        "Customer creation failed:",
+        customerError.response ? customerError.response.data : customerError.message,
+      )
     }
 
     const response = await axios.post(
@@ -195,7 +208,7 @@ app.post("/api/initialize-payment", async (req, res) => {
       traveler_type: metadata.traveler_type,
       group_size: metadata.group_size,
       specific_requests: metadata.specific_requests,
-      guide_id: metadata.guide_id, 
+      guide_id: metadata.guide_id,
     }
 
     console.log("Attempting to save booking data to Supabase:", bookingData)
@@ -216,38 +229,33 @@ app.post("/api/initialize-payment", async (req, res) => {
   }
 })
 
-app.get('/test-email-postmark', async (req, res) => {
+app.get("/test-email-postmark", async (req, res) => {
   try {
     const testBooking = {
-      first_name: 'Test',
-      last_name: 'User',
-      email: 'bookings@experienceplateau.com', // Use your email for testing
-      phone_number: '1234567890',
-      package_type: 'Premium Tour',
-      traveler_type: 'Individual',
+      first_name: "Test",
+      last_name: "User",
+      email: "bookings@experienceplateau.com", // Use your email for testing
+      phone_number: "1234567890",
+      package_type: "Premium Tour",
+      traveler_type: "Individual",
       amount: 25000,
-      payment_reference: 'TEST-REF-123',
-      payment_status: 'completed',
-      specific_requests: 'None'
-    };
-    
-    await sendReceiptEmails(
-      testBooking, 
-      'TEST-RCP-123', 
-      { paid_at: new Date(), channel: 'card' }
-    );
-    
-    res.send('Test email sent successfully via Postmark');
+      payment_reference: "TEST-REF-123",
+      payment_status: "completed",
+      specific_requests: "None",
+    }
+
+    await sendReceiptEmails(testBooking, "TEST-RCP-123", { paid_at: new Date(), channel: "card" })
+
+    res.send("Test email sent successfully via Postmark")
   } catch (error) {
-    console.error('Email test failed:', error);
-    res.status(500).send(`Error: ${error.message}`);
+    console.error("Email test failed:", error)
+    res.status(500).send(`Error: ${error.message}`)
   }
-});
+})
 
 app.get("/api/verify-payment/:reference", async (req, res) => {
   try {
     const { reference } = req.params
-
     console.log("Received payment verification request for reference:", reference)
 
     const response = await axios.get(`${PAYSTACK_BASE_URL}/transaction/verify/${reference}`, {
@@ -276,44 +284,36 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
         bookingStatus = "pending"
     }
 
-  
-
     // Update booking status in Supabase
     const { data, error } = await supabase
       .from("bookings")
       .update({ payment_status: bookingStatus })
       .eq("payment_reference", reference)
 
+    if (paymentStatus === "success") {
+      // Get full booking details from database
+      const { data: bookingData, error: bookingError } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("payment_reference", reference)
+        .single()
 
-      if (paymentStatus === "success") {
-        // Get full booking details from database
-        const { data: bookingData, error: bookingError } = await supabase
-          .from("bookings")
-          .select("*")
-          .eq("payment_reference", reference)
-          .single();
-  
-          if (bookingError) throw bookingError;
-  
-                // Generate receipt number
-        const receiptNumber = `RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        
+      if (bookingError) throw bookingError
 
-         // Update booking with receipt number
-      await supabase
-      .from("bookings")
-      .update({ receipt_number: receiptNumber })
-      .eq("payment_reference", reference);
+      // Generate receipt number
+      const receiptNumber = `RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`
 
-       // Send receipt emails
-       await sendReceiptEmails(bookingData, receiptNumber, response.data.data);
+      // Update booking with receipt number
+      await supabase.from("bookings").update({ receipt_number: receiptNumber }).eq("payment_reference", reference)
 
-       // If a guide was selected, send notification to the guide
+      // Send receipt emails
+      await sendReceiptEmails(bookingData, receiptNumber, response.data.data)
+
+      // If a guide was selected, send notification to the guide
       if (bookingData.guide_id) {
-        await sendGuideNotification(bookingData, receiptNumber);
+        await sendGuideNotification(bookingData, receiptNumber)
       }
-        
-        }
+    }
 
     if (error) {
       console.error("Error updating booking status in Supabase:", error)
@@ -336,19 +336,19 @@ app.get("/api/verify-payment/:reference", async (req, res) => {
 // Define a GET endpoint to retrieve guides
 app.get("/api/guides", async (req, res) => {
   try {
-    const { data, error } = await supabase.from("guides").select("*");
+    const { data, error } = await supabase.from("guides").select("*")
 
     if (error) {
-      console.error("Error fetching guides:", error);
-      return res.status(500).json({ error: "Failed to fetch guides" });
+      console.error("Error fetching guides:", error)
+      return res.status(500).json({ error: "Failed to fetch guides" })
     }
 
-    res.json(data);
+    res.json(data)
   } catch (error) {
-    console.error("Unexpected error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Unexpected error:", error)
+    res.status(500).json({ error: "Internal server error" })
   }
-});
+})
 
 // Test Supabase connection
 app.get("/api/test-supabase", async (req, res) => {
@@ -374,16 +374,16 @@ async function sendGuideNotification(booking, receiptNumber) {
       .from("guides")
       .select("*")
       .eq("id", booking.guide_id)
-      .single();
-    
+      .single()
+
     if (guideError) {
-      console.error("Error fetching guide data:", guideError);
-      return;
+      console.error("Error fetching guide data:", guideError)
+      return
     }
 
     // Format date
-    const bookingDate = new Date().toLocaleDateString();
-    
+    const bookingDate = new Date().toLocaleDateString()
+
     // Guide notification HTML template
     const guideHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
@@ -404,10 +404,10 @@ async function sendGuideNotification(booking, receiptNumber) {
           <h2>Booking Details</h2>
           <p><strong>Package:</strong> ${booking.package_type}</p>
           <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
-          ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+          ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ""}
           <p><strong>Receipt Number:</strong> ${receiptNumber}</p>
           <p><strong>Booking Date:</strong> ${bookingDate}</p>
-          <p><strong>Specific Requests:</strong> ${booking.specific_requests || 'None'}</p>
+          <p><strong>Specific Requests:</strong> ${booking.specific_requests || "None"}</p>
         </div>
         
         <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px;">
@@ -415,20 +415,20 @@ async function sendGuideNotification(booking, receiptNumber) {
           <p>If you have any questions, please contact our booking team at bookings@experienceplateau.com</p>
         </div>
       </div>
-    `;
-    
+    `
+
     // Send email to guide
     await client.sendEmail({
-      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
-      To: guideData.email || 'bookings@experienceplateau.com', // In production, use the actual guide email
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: guideData.email || "bookings@experienceplateau.com", // In production, use the actual guide email
       Subject: `New Tour Assignment: ${booking.first_name} ${booking.last_name}`,
       HtmlBody: guideHtml,
-      MessageStream: 'outbound'
-    });
-    
-    console.log(`Guide notification email sent to ${guideData.name} (${guideData.email})`);
+      MessageStream: "outbound",
+    })
+
+    console.log(`Guide notification email sent to ${guideData.name} (${guideData.email})`)
   } catch (error) {
-    console.error('Error sending guide notification email:', error);
+    console.error("Error sending guide notification email:", error)
     // Continue execution even if email fails
   }
 }
@@ -437,9 +437,9 @@ async function sendGuideNotification(booking, receiptNumber) {
 // Replace your existing sendReceiptEmails function with this:
 async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
   // Format date
-  const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString();
-  const testRecipient = booking.email; 
-  
+  const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString()
+  const testRecipient = booking.email
+
   // Customer receipt HTML (your existing template)
   const customerHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
@@ -481,8 +481,8 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
         <p>If you have any questions, please contact us at support@experienceplateau.com</p>
       </div>
     </div>
-  `;
-  
+  `
+
   // Admin receipt HTML (your existing template)
   const adminHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
@@ -498,7 +498,7 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
       <h2>Booking Details</h2>
       <p><strong>Package:</strong> ${booking.package_type}</p>
       <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
-      ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ''}
+      ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ""}
       <p><strong>Specific Requests:</strong> ${booking.specific_requests}</p>
       
       <h2>Payment Information</h2>
@@ -506,43 +506,41 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
       <p><strong>Payment Date:</strong> ${paymentDate}</p>
       <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
       <p><strong>Payment Status:</strong> ${booking.payment_status}</p>
-      <p><strong>Payment Channel:</strong> ${paymentDetails.channel || 'N/A'}</p>
-      <p><strong>Payment Method:</strong> ${paymentDetails.authorization?.card_type || 'N/A'}</p>
+      <p><strong>Payment Channel:</strong> ${paymentDetails.channel || "N/A"}</p>
+      <p><strong>Payment Method:</strong> ${paymentDetails.authorization?.card_type || "N/A"}</p>
     </div>
-  `;
-  
+  `
+
   try {
     // Send customer receipt
     await client.sendEmail({
-      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
       To: testRecipient,
-      Subject: 'Your Booking Receipt',
+      Subject: "Your Booking Receipt",
       HtmlBody: customerHtml,
-      MessageStream: 'outbound'
-    });
-    
+      MessageStream: "outbound",
+    })
+
     // Send admin notification
     await client.sendEmail({
-      From: process.env.EMAIL_FROM || 'bookings@experienceplateau.com',
-      To: process.env.ADMIN_EMAIL || 'bookings@experienceplateau.com',
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: process.env.ADMIN_EMAIL || "bookings@experienceplateau.com",
       Subject: `New Booking: ${booking.first_name} ${booking.last_name}`,
       HtmlBody: adminHtml,
-      MessageStream: 'outbound'
-    });
-    
-    console.log('Receipt emails sent successfully via Postmark');
+      MessageStream: "outbound",
+    })
+
+    console.log("Receipt emails sent successfully via Postmark")
   } catch (error) {
-    console.error('Error sending receipt emails:', error);
+    console.error("Error sending receipt emails:", error)
     // Continue execution even if email fails
   }
 }
 
 // Add this new endpoint to handle contact form submissions
-
 app.post("/api/contact", async (req, res) => {
   try {
     const { firstName, lastName, email, comment } = req.body
-
     console.log("Received contact form submission:", { firstName, lastName, email, comment })
 
     // Insert contact form data into Supabase
@@ -569,51 +567,45 @@ app.post("/api/contact", async (req, res) => {
 })
 
 // Get all tours
-app.get('/api/tours', async (req, res) => {
+app.get("/api/tours", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('tours')
-      .select('*');
+    const { data, error } = await supabase.from("tours").select("*")
 
-    if (error) throw error;
+    if (error) throw error
 
-    res.json(data);
+    res.json(data)
   } catch (error) {
-    console.error('Error fetching tours:', error);
-    res.status(500).json({ error: 'Failed to fetch tours' });
+    console.error("Error fetching tours:", error)
+    res.status(500).json({ error: "Failed to fetch tours" })
   }
-});
+})
 
 // Get specific tour data
-app.get('/api/tours/:id', async (req, res) => {
+app.get("/api/tours/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const { data, error } = await supabase
-      .from('tours')
-      .select('*, virtual_tours(*)')
-      .eq('id', id)
-      .single();
+    const { id } = req.params
+    const { data, error } = await supabase.from("tours").select("*, virtual_tours(*)").eq("id", id).single()
 
-    if (error) throw error;
+    if (error) throw error
 
-    res.json(data);
+    res.json(data)
   } catch (error) {
-    console.error('Error fetching tour:', error);
-    res.status(500).json({ error: 'Failed to fetch tour' });
+    console.error("Error fetching tour:", error)
+    res.status(500).json({ error: "Failed to fetch tour" })
   }
-});
+})
 
 app.get("/video", async (req, res) => {
-  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4";
+  const videoUrl = "https://drive.google.com/uc?export=download&id=1tVPjXiNy0NgPvIcpXt_tg_OpDK7yhxm4"
   try {
-    const response = await axios.get(videoUrl, { responseType: "stream" });
-    res.setHeader("Content-Type", "video/mp4"); // Set the correct MIME type
-    response.data.pipe(res);
+    const response = await axios.get(videoUrl, { responseType: "stream" })
+    res.setHeader("Content-Type", "video/mp4") // Set the correct MIME type
+    response.data.pipe(res)
   } catch (error) {
-    console.error("Error fetching video:", error);
-    res.status(500).send("Failed to fetch video");
+    console.error("Error fetching video:", error)
+    res.status(500).send("Failed to fetch video")
   }
-});
+})
 
 // Generate access code
 function generateAccessCode() {
@@ -725,7 +717,7 @@ app.post("/api/initialize-virtual-tour-payment", async (req, res) => {
   }
 })
 
-// Verify virtual tour payment
+// Verify virtual tour payment - UPDATED WITH 24-HOUR EXPIRATION
 app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
   try {
     const { reference } = req.params
@@ -781,22 +773,27 @@ app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
         .update({ receipt_number: receiptNumber })
         .eq("payment_reference", reference)
 
-      // Grant user access
+      // Grant user access with 24-hour expiration
+      const expirationTime = get24HourExpiration()
+
       await supabase.from("user_tour_access").upsert({
         email: updateData.email,
         tour_id: updateData.tour_id,
         access_code: updateData.access_code,
         granted_at: new Date().toISOString(),
-        expires_at: null, // No expiration for now
+        expires_at: expirationTime, // Set 24-hour expiration
       })
 
-      // Send access code email
-      await sendVirtualTourAccessEmail(updateData, receiptNumber, response.data.data)
+      console.log(`Access granted until: ${expirationTime}`)
+
+      // Send access code email with expiration info
+      await sendVirtualTourAccessEmail(updateData, receiptNumber, response.data.data, expirationTime)
 
       res.json({
         status: bookingStatus,
         message: `Payment ${bookingStatus}`,
         accessCode: updateData.access_code,
+        expiresAt: expirationTime,
         paymentDetails: response.data.data,
       })
     } else {
@@ -815,7 +812,7 @@ app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
   }
 })
 
-// Verify access code
+// Verify access code - UPDATED WITH EXPIRATION CHECK
 app.post("/api/verify-access-code", async (req, res) => {
   try {
     const { accessCode, tourId } = req.body
@@ -839,21 +836,40 @@ app.post("/api/verify-access-code", async (req, res) => {
       })
     }
 
+    // Check if access has expired by looking at user_tour_access table
+    const { data: accessData, error: accessError } = await supabase
+      .from("user_tour_access")
+      .select("expires_at")
+      .eq("access_code", accessCode)
+      .eq("tour_id", tourId)
+      .single()
+
+    if (accessError || !accessData) {
+      console.log("Access record not found:", accessError)
+      return res.json({
+        success: false,
+        message: "Access record not found",
+      })
+    }
+
+    // Check if access has expired
+    if (isAccessExpired(accessData.expires_at)) {
+      console.log("Access code has expired:", accessData.expires_at)
+      return res.json({
+        success: false,
+        expired: true,
+        message: "Access code has expired. Please purchase new access.",
+        expiresAt: accessData.expires_at,
+      })
+    }
+
     // Mark access code as used (optional)
     await supabase.from("virtual_tour_payments").update({ access_code_used: true }).eq("access_code", accessCode)
-
-    // Grant user access if not already granted
-    await supabase.from("user_tour_access").upsert({
-      email: data.email,
-      tour_id: tourId,
-      access_code: accessCode,
-      granted_at: new Date().toISOString(),
-      expires_at: null,
-    })
 
     res.json({
       success: true,
       message: "Access granted successfully",
+      expiresAt: accessData.expires_at,
     })
   } catch (error) {
     console.error("Access code verification failed:", error)
@@ -864,7 +880,7 @@ app.post("/api/verify-access-code", async (req, res) => {
   }
 })
 
-// Check user access
+// Check user access - UPDATED WITH EXPIRATION FILTERING
 app.post("/api/check-user-access", async (req, res) => {
   try {
     const { email, tourIds } = req.body
@@ -878,7 +894,7 @@ app.post("/api/check-user-access", async (req, res) => {
 
     const { data, error } = await supabase
       .from("user_tour_access")
-      .select("tour_id")
+      .select("tour_id, expires_at")
       .eq("email", email)
       .in("tour_id", tourIds)
 
@@ -890,9 +906,12 @@ app.post("/api/check-user-access", async (req, res) => {
       })
     }
 
+    // Filter out expired access
+    const validAccess = (data || []).filter((item) => !isAccessExpired(item.expires_at))
+
     res.json({
       success: true,
-      access: data || [],
+      access: validAccess,
     })
   } catch (error) {
     console.error("Check user access failed:", error)
@@ -903,16 +922,31 @@ app.post("/api/check-user-access", async (req, res) => {
   }
 })
 
-// Function to send virtual tour access email
-async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails) {
+// Function to send virtual tour access email - UPDATED WITH EXPIRATION INFO
+async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails, expirationTime) {
   const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString()
+  const expirationDate = new Date(expirationTime).toLocaleString()
 
-  // Customer access email HTML
+  // Customer access email HTML with 24-hour expiration warning
   const customerHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
       <div style="text-align: center; margin-bottom: 20px;">
         <h1 style="color: #5A8E00;">Virtual Tour Access Granted!</h1>
         <p>Receipt #: ${receiptNumber}</p>
+      </div>
+      
+      <!-- 24-HOUR EXPIRATION WARNING -->
+      <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+          <span style="font-size: 20px; margin-right: 10px;">⏰</span>
+          <h3 style="color: #856404; margin: 0;">24-Hour Access Period</h3>
+        </div>
+        <p style="color: #856404; margin: 0; font-weight: bold;">
+          Your access expires on: ${expirationDate}
+        </p>
+        <p style="color: #856404; margin: 5px 0 0 0; font-size: 14px;">
+          After expiration, you'll need to purchase access again to view the tour.
+        </p>
       </div>
       
       <div style="background-color: #97E12B; background-opacity: 0.1; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center;">
@@ -923,7 +957,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
           </span>
         </div>
         <p style="color: #1A2E0D; margin-bottom: 0;">
-          Use this code to access your virtual tour anytime
+          Use this code to access your virtual tour
         </p>
       </div>
       
@@ -933,6 +967,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
         <p><strong>Name:</strong> ${payment.first_name} ${payment.last_name}</p>
         <p><strong>Email:</strong> ${payment.email}</p>
         <p><strong>Purchase Date:</strong> ${paymentDate}</p>
+        <p><strong>Access Expires:</strong> ${expirationDate}</p>
         <p><strong>Amount Paid:</strong> ₦${payment.amount.toLocaleString()}</p>
         <p><strong>Payment Reference:</strong> ${payment.payment_reference}</p>
       </div>
@@ -948,7 +983,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
         
         <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border-radius: 5px;">
           <p style="margin: 0; color: #856404;">
-            <strong>💡 Pro Tip:</strong> Save this email for future reference. Your access code never expires!
+            <strong>⚠️ Important:</strong> Your access is valid for 24 hours only. Make sure to enjoy your tour before ${expirationDate}!
           </p>
         </div>
       </div>
@@ -960,7 +995,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
     </div>
   `
 
-  // Admin notification HTML
+  // Admin notification HTML with expiration info
   const adminHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
       <h1 style="color: #5A8E00;">New Virtual Tour Purchase</h1>
@@ -974,6 +1009,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
       <h2>Tour Details</h2>
       <p><strong>Tour:</strong> ${payment.tour_name} (ID: ${payment.tour_id})</p>
       <p><strong>Access Code:</strong> ${payment.access_code}</p>
+      <p><strong>Access Expires:</strong> ${expirationDate}</p>
       
       <h2>Payment Information</h2>
       <p><strong>Amount:</strong> ₦${payment.amount.toLocaleString()}</p>
@@ -989,7 +1025,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
     await client.sendEmail({
       From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
       To: payment.email,
-      Subject: `Your Virtual Tour Access Code - ${payment.tour_name}`,
+      Subject: `Your 24-Hour Virtual Tour Access - ${payment.tour_name}`,
       HtmlBody: customerHtml,
       MessageStream: "outbound",
     })
@@ -1003,19 +1039,16 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
       MessageStream: "outbound",
     })
 
-    console.log("Virtual tour access emails sent successfully")
+    console.log("Virtual tour access emails sent successfully with expiration info")
   } catch (error) {
     console.error("Error sending virtual tour access emails:", error)
   }
 }
 
-
 // ADD this new endpoint for fallback
-
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
 
 // Test the endpoint
 console.log("Video endpoint available at: http://localhost:" + port + "/video")
-
