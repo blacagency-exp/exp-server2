@@ -885,6 +885,10 @@ app.post("/api/check-user-access", async (req, res) => {
   try {
     const { email, tourIds } = req.body
 
+    console.log("=== ACCESS CHECK REQUEST ===")
+    console.log("Email:", email)
+    console.log("Tour IDs:", tourIds)
+
     if (!email || !tourIds || !Array.isArray(tourIds)) {
       return res.status(400).json({
         success: false,
@@ -894,9 +898,12 @@ app.post("/api/check-user-access", async (req, res) => {
 
     const { data, error } = await supabase
       .from("user_tour_access")
-      .select("tour_id, expires_at")
+      .select("tour_id, expires_at, access_code, granted_at")
       .eq("email", email)
       .in("tour_id", tourIds)
+
+    console.log("Database query result:", data)
+    console.log("Database query error:", error)
 
     if (error) {
       console.error("Error checking user access:", error)
@@ -907,7 +914,17 @@ app.post("/api/check-user-access", async (req, res) => {
     }
 
     // Filter out expired access
-    const validAccess = (data || []).filter((item) => !isAccessExpired(item.expires_at))
+    const now = new Date()
+    console.log("Current time:", now.toISOString())
+
+    const validAccess = (data || []).filter((item) => {
+      const isExpired = isAccessExpired(item.expires_at)
+      console.log(`Tour ${item.tour_id}: expires_at=${item.expires_at}, isExpired=${isExpired}`)
+      return !isExpired
+    })
+
+    console.log("Valid access after filtering:", validAccess)
+    console.log("=== END ACCESS CHECK ===")
 
     res.json({
       success: true,
