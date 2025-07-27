@@ -93,7 +93,7 @@ app.get("/api/debug-user-access/:email", async (req, res) => {
   }
 })
 
-// ADD ENDPOINT TO MANUALLY FIX ACCESS
+// FIXED ENDPOINT TO MANUALLY FIX ACCESS
 app.post("/api/fix-user-access", async (req, res) => {
   try {
     const { email, accessCode } = req.body
@@ -111,6 +111,7 @@ app.post("/api/fix-user-access", async (req, res) => {
       .single()
 
     if (paymentError || !payment) {
+      console.error("Payment not found:", paymentError)
       return res.status(404).json({
         success: false,
         message: "Payment not found",
@@ -123,28 +124,44 @@ app.post("/api/fix-user-access", async (req, res) => {
     // Create or update user_tour_access entry
     const expirationTime = get24HourExpiration()
 
-    const { data: accessData, error: accessError } = await supabase.from("user_tour_access").upsert({
-      email: payment.email,
-      tour_id: payment.tour_id,
-      access_code: payment.access_code,
-      granted_at: new Date().toISOString(),
-      expires_at: expirationTime,
-    })
+    // First, try to delete any existing record for this user and tour
+    const { error: deleteError } = await supabase
+      .from("user_tour_access")
+      .delete()
+      .eq("email", payment.email)
+      .eq("tour_id", payment.tour_id)
+
+    console.log("Delete existing access record result:", deleteError)
+
+    // Now insert the new record
+    const { data: accessData, error: accessError } = await supabase
+      .from("user_tour_access")
+      .insert({
+        email: payment.email,
+        tour_id: payment.tour_id,
+        access_code: payment.access_code,
+        granted_at: new Date().toISOString(),
+        expires_at: expirationTime,
+      })
+      .select()
 
     if (accessError) {
+      console.error("Failed to create access record:", accessError)
       return res.status(500).json({
         success: false,
         message: "Failed to create access record",
         error: accessError,
+        details: accessError.message,
       })
     }
 
-    console.log("Access record created/updated:", accessData)
+    console.log("Access record created successfully:", accessData)
 
     res.json({
       success: true,
       message: "Access fixed successfully",
       payment,
+      accessData,
       expiresAt: expirationTime,
     })
   } catch (error) {
@@ -877,13 +894,25 @@ app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
       // Grant user access with 24-hour expiration
       const expirationTime = get24HourExpiration()
 
-      await supabase.from("user_tour_access").upsert({
-        email: updateData.email,
-        tour_id: updateData.tour_id,
-        access_code: updateData.access_code,
-        granted_at: new Date().toISOString(),
-        expires_at: expirationTime, // Set 24-hour expiration
-      })
+      // Use INSERT instead of UPSERT to avoid conflicts
+      const { data: accessData, error: accessError } = await supabase
+        .from("user_tour_access")
+        .insert({
+          email: updateData.email,
+          tour_id: updateData.tour_id,
+          access_code: updateData.access_code,
+          granted_at: new Date().toISOString(),
+          expires_at: expirationTime,
+        })
+        .select()
+
+      if (accessError) {
+        console.error("Error creating access record:", accessError)
+        // Don't fail the whole process if access record creation fails
+        // The fix endpoint can handle this later
+      } else {
+        console.log("Access record created successfully:", accessData)
+      }
 
       console.log(`Access granted until: ${expirationTime}`)
 
@@ -951,7 +980,7 @@ app.post("/api/verify-access-code", async (req, res) => {
       // If no access record exists, create one with 24-hour expiration
       const expirationTime = get24HourExpiration()
 
-      const { data: newAccessData, error: newAccessError } = await supabase.from("user_tour_access").upsert({
+      const { data: newAccessData, error: newAccessError } = await supabase.from("user_tour_access").insert({
         email: data.email,
         tour_id: tourId,
         access_code: accessCode,
