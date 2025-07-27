@@ -56,6 +56,107 @@ function isAccessExpired(expiresAt) {
   return now > expiration
 }
 
+// ADD DEBUG ENDPOINT TO CHECK DATABASE ENTRIES
+app.get("/api/debug-user-access/:email", async (req, res) => {
+  try {
+    const { email } = req.params
+
+    console.log("=== DEBUG USER ACCESS ===")
+    console.log("Email:", email)
+
+    // Check virtual_tour_payments table
+    const { data: payments, error: paymentsError } = await supabase
+      .from("virtual_tour_payments")
+      .select("*")
+      .eq("email", email)
+      .eq("payment_status", "completed")
+
+    console.log("Virtual tour payments:", payments)
+    console.log("Payments error:", paymentsError)
+
+    // Check user_tour_access table
+    const { data: access, error: accessError } = await supabase.from("user_tour_access").select("*").eq("email", email)
+
+    console.log("User tour access:", access)
+    console.log("Access error:", accessError)
+
+    res.json({
+      email,
+      payments: payments || [],
+      access: access || [],
+      paymentsError,
+      accessError,
+    })
+  } catch (error) {
+    console.error("Debug endpoint error:", error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ADD ENDPOINT TO MANUALLY FIX ACCESS
+app.post("/api/fix-user-access", async (req, res) => {
+  try {
+    const { email, accessCode } = req.body
+
+    console.log("=== FIXING USER ACCESS ===")
+    console.log("Email:", email)
+    console.log("Access Code:", accessCode)
+
+    // Find the payment record
+    const { data: payment, error: paymentError } = await supabase
+      .from("virtual_tour_payments")
+      .select("*")
+      .eq("access_code", accessCode)
+      .eq("payment_status", "completed")
+      .single()
+
+    if (paymentError || !payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found",
+        error: paymentError,
+      })
+    }
+
+    console.log("Found payment:", payment)
+
+    // Create or update user_tour_access entry
+    const expirationTime = get24HourExpiration()
+
+    const { data: accessData, error: accessError } = await supabase.from("user_tour_access").upsert({
+      email: payment.email,
+      tour_id: payment.tour_id,
+      access_code: payment.access_code,
+      granted_at: new Date().toISOString(),
+      expires_at: expirationTime,
+    })
+
+    if (accessError) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to create access record",
+        error: accessError,
+      })
+    }
+
+    console.log("Access record created/updated:", accessData)
+
+    res.json({
+      success: true,
+      message: "Access fixed successfully",
+      payment,
+      expiresAt: expirationTime,
+    })
+  } catch (error) {
+    console.error("Fix access error:", error)
+    res.status(500).json({
+      success: false,
+      message: "Failed to fix access",
+      error: error.message,
+    })
+  }
+})
+
 app.post("/api/subscribe", async (req, res) => {
   const { email } = req.body
   console.log("Received subscription request for email:", email)
@@ -845,10 +946,36 @@ app.post("/api/verify-access-code", async (req, res) => {
       .single()
 
     if (accessError || !accessData) {
-      console.log("Access record not found:", accessError)
+      console.log("Access record not found, creating new one:", accessError)
+
+      // If no access record exists, create one with 24-hour expiration
+      const expirationTime = get24HourExpiration()
+
+      const { data: newAccessData, error: newAccessError } = await supabase.from("user_tour_access").upsert({
+        email: data.email,
+        tour_id: tourId,
+        access_code: accessCode,
+        granted_at: new Date().toISOString(),
+        expires_at: expirationTime,
+      })
+
+      if (newAccessError) {
+        console.error("Failed to create access record:", newAccessError)
+        return res.json({
+          success: false,
+          message: "Failed to create access record",
+        })
+      }
+
+      console.log("New access record created:", newAccessData)
+
+      // Mark access code as used (optional)
+      await supabase.from("virtual_tour_payments").update({ access_code_used: true }).eq("access_code", accessCode)
+
       return res.json({
-        success: false,
-        message: "Access record not found",
+        success: true,
+        message: "Access granted successfully",
+        expiresAt: expirationTime,
       })
     }
 
