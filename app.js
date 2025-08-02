@@ -56,6 +56,52 @@ function isAccessExpired(expiresAt) {
   return now > expiration
 }
 
+// Helper function to create access record with retry logic
+async function createAccessRecord(email, tourId, accessCode, retries = 3) {
+  const expirationTime = get24HourExpiration()
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Creating access record - Attempt ${attempt}/${retries}`)
+
+      // First, delete any existing record for this user and tour
+      await supabase.from("user_tour_access").delete().eq("email", email).eq("tour_id", tourId)
+
+      // Then create a new access record
+      const { data: accessData, error: accessError } = await supabase
+        .from("user_tour_access")
+        .insert({
+          email: email,
+          tour_id: tourId,
+          access_code: accessCode,
+          granted_at: new Date().toISOString(),
+          expires_at: expirationTime,
+        })
+        .select()
+
+      if (accessError) {
+        console.error(`Access record creation failed on attempt ${attempt}:`, accessError)
+        if (attempt === retries) {
+          throw accessError
+        }
+        // Wait before retry
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
+        continue
+      }
+
+      console.log("Access record created successfully:", accessData)
+      return { success: true, data: accessData, expiresAt: expirationTime }
+    } catch (error) {
+      console.error(`Access record creation error on attempt ${attempt}:`, error)
+      if (attempt === retries) {
+        return { success: false, error: error.message }
+      }
+      // Wait before retry
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
+    }
+  }
+}
+
 // ADD DEBUG ENDPOINT TO CHECK DATABASE ENTRIES
 app.get("/api/debug-user-access/:email", async (req, res) => {
   try {
@@ -835,7 +881,7 @@ app.post("/api/initialize-virtual-tour-payment", async (req, res) => {
   }
 })
 
-// Verify virtual tour payment - UPDATED WITH 24-HOUR EXPIRATION
+// Verify virtual tour payment - IMPROVED WITH AUTOMATIC ACCESS CREATION
 app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
   try {
     const { reference } = req.params
@@ -891,40 +937,32 @@ app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
         .update({ receipt_number: receiptNumber })
         .eq("payment_reference", reference)
 
-      // Grant user access with 24-hour expiration
-      const expirationTime = get24HourExpiration()
+      // AUTOMATICALLY CREATE ACCESS RECORD WITH RETRY LOGIC
+      console.log("=== CREATING ACCESS RECORD AUTOMATICALLY ===")
+      const accessResult = await createAccessRecord(updateData.email, updateData.tour_id, updateData.access_code)
 
-      // Use INSERT instead of UPSERT to avoid conflicts
-      const { data: accessData, error: accessError } = await supabase
-        .from("user_tour_access")
-        .insert({
-          email: updateData.email,
-          tour_id: updateData.tour_id,
-          access_code: updateData.access_code,
-          granted_at: new Date().toISOString(),
-          expires_at: expirationTime,
-        })
-        .select()
-
-      if (accessError) {
-        console.error("Error creating access record:", accessError)
-        // Don't fail the whole process if access record creation fails
-        // The fix endpoint can handle this later
+      if (accessResult.success) {
+        console.log("✅ Access record created successfully automatically")
       } else {
-        console.log("Access record created successfully:", accessData)
+        console.error("❌ Failed to create access record automatically:", accessResult.error)
+        // Don't fail the payment - user can still use access code manually
       }
 
-      console.log(`Access granted until: ${expirationTime}`)
-
       // Send access code email with expiration info
-      await sendVirtualTourAccessEmail(updateData, receiptNumber, response.data.data, expirationTime)
+      await sendVirtualTourAccessEmail(
+        updateData,
+        receiptNumber,
+        response.data.data,
+        accessResult.expiresAt || get24HourExpiration(),
+      )
 
       res.json({
         status: bookingStatus,
         message: `Payment ${bookingStatus}`,
         accessCode: updateData.access_code,
-        expiresAt: expirationTime,
+        expiresAt: accessResult.expiresAt || get24HourExpiration(),
         paymentDetails: response.data.data,
+        accessCreated: accessResult.success,
       })
     } else {
       res.json({
@@ -942,7 +980,7 @@ app.get("/api/verify-virtual-tour-payment/:reference", async (req, res) => {
   }
 })
 
-// Verify access code - UPDATED WITH EXPIRATION CHECK
+// Verify access code - UPDATED WITH AUTOMATIC ACCESS CREATION
 app.post("/api/verify-access-code", async (req, res) => {
   try {
     const { accessCode, tourId } = req.body
@@ -975,28 +1013,20 @@ app.post("/api/verify-access-code", async (req, res) => {
       .single()
 
     if (accessError || !accessData) {
-      console.log("Access record not found, creating new one:", accessError)
+      console.log("Access record not found, creating new one automatically:", accessError)
 
-      // If no access record exists, create one with 24-hour expiration
-      const expirationTime = get24HourExpiration()
+      // AUTOMATICALLY CREATE ACCESS RECORD
+      const accessResult = await createAccessRecord(data.email, tourId, accessCode)
 
-      const { data: newAccessData, error: newAccessError } = await supabase.from("user_tour_access").insert({
-        email: data.email,
-        tour_id: tourId,
-        access_code: accessCode,
-        granted_at: new Date().toISOString(),
-        expires_at: expirationTime,
-      })
-
-      if (newAccessError) {
-        console.error("Failed to create access record:", newAccessError)
+      if (!accessResult.success) {
+        console.error("Failed to create access record:", accessResult.error)
         return res.json({
           success: false,
           message: "Failed to create access record",
         })
       }
 
-      console.log("New access record created:", newAccessData)
+      console.log("✅ New access record created automatically")
 
       // Mark access code as used (optional)
       await supabase.from("virtual_tour_payments").update({ access_code_used: true }).eq("access_code", accessCode)
@@ -1004,7 +1034,7 @@ app.post("/api/verify-access-code", async (req, res) => {
       return res.json({
         success: true,
         message: "Access granted successfully",
-        expiresAt: expirationTime,
+        expiresAt: accessResult.expiresAt,
       })
     }
 
@@ -1041,10 +1071,6 @@ app.post("/api/check-user-access", async (req, res) => {
   try {
     const { email, tourIds } = req.body
 
-    console.log("=== ACCESS CHECK REQUEST ===")
-    console.log("Email:", email)
-    console.log("Tour IDs:", tourIds)
-
     if (!email || !tourIds || !Array.isArray(tourIds)) {
       return res.status(400).json({
         success: false,
@@ -1058,9 +1084,6 @@ app.post("/api/check-user-access", async (req, res) => {
       .eq("email", email)
       .in("tour_id", tourIds)
 
-    console.log("Database query result:", data)
-    console.log("Database query error:", error)
-
     if (error) {
       console.error("Error checking user access:", error)
       return res.status(500).json({
@@ -1071,16 +1094,10 @@ app.post("/api/check-user-access", async (req, res) => {
 
     // Filter out expired access
     const now = new Date()
-    console.log("Current time:", now.toISOString())
-
     const validAccess = (data || []).filter((item) => {
       const isExpired = isAccessExpired(item.expires_at)
-      console.log(`Tour ${item.tour_id}: expires_at=${item.expires_at}, isExpired=${isExpired}`)
       return !isExpired
     })
-
-    console.log("Valid access after filtering:", validAccess)
-    console.log("=== END ACCESS CHECK ===")
 
     res.json({
       success: true,
@@ -1218,10 +1235,8 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
   }
 }
 
-// ADD this new endpoint for fallback
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
 })
 
-// Test the endpoint
 console.log("Video endpoint available at: http://localhost:" + port + "/video")
