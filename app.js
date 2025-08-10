@@ -101,6 +101,468 @@ async function createAccessRecord(email, tourId, accessCode, retries = 3) {
     }
   }
 }
+// Generate booking reference for hotels
+function generateHotelBookingReference() {
+  const timestamp = Date.now().toString().slice(-6)
+  const random = Math.floor(Math.random() * 1000)
+    .toString()
+    .padStart(3, "0")
+  return `HTL-${timestamp}${random}`
+}
+
+// ===== HOTEL BOOKING ENDPOINTS =====
+
+// Get all hotels with room types
+app.get("/api/hotels", async (req, res) => {
+  try {
+    const { data: hotels, error: hotelsError } = await supabase
+      .from("hotels")
+      .select(`
+        *,
+        room_types (*)
+      `)
+      .eq("is_active", true)
+
+    if (hotelsError) {
+      console.error("Error fetching hotels:", hotelsError)
+      return res.status(500).json({ error: "Failed to fetch hotels" })
+    }
+
+    res.json(hotels || [])
+  } catch (error) {
+    console.error("Unexpected error fetching hotels:", error)
+    res.status(500).json({ error: "Internal server error" })
+  }
+})
+
+// Initialize hotel booking payment
+app.post("/api/initialize-hotel-booking", async (req, res) => {
+  try {
+    const {
+      guestName,
+      guestEmail,
+      guestPhone,
+      hotelId,
+      roomTypeId,
+      checkInDate,
+      checkOutDate,
+      numberOfGuests,
+      numberOfNights,
+      totalAmount,
+      specialRequests,
+    } = req.body
+
+    console.log("Received hotel booking initialization:", {
+      guestName,
+      guestEmail,
+      guestPhone,
+      hotelId,
+      roomTypeId,
+      checkInDate,
+      checkOutDate,
+      numberOfGuests,
+      numberOfNights,
+      totalAmount,
+    })
+
+    // Get hotel and room type details
+    const { data: hotel, error: hotelError } = await supabase.from("hotels").select("*").eq("id", hotelId).single()
+
+    if (hotelError || !hotel) {
+      return res.status(404).json({ error: "Hotel not found" })
+    }
+
+    const { data: roomType, error: roomTypeError } = await supabase
+      .from("room_types")
+      .select("*")
+      .eq("id", roomTypeId)
+      .single()
+
+    if (roomTypeError || !roomType) {
+      return res.status(404).json({ error: "Room type not found" })
+    }
+
+    // Calculate commission (10%)
+    const platformCommission = totalAmount * 0.1
+    const hotelAmount = totalAmount - platformCommission
+
+    // Generate booking reference
+    const bookingReference = generateHotelBookingReference()
+
+    // Create customer on Paystack
+    try {
+      const customerResponse = await axios.post(
+        `${PAYSTACK_BASE_URL}/customer`,
+        {
+          email: guestEmail,
+          first_name: guestName.split(" ")[0],
+          last_name: guestName.split(" ").slice(1).join(" "),
+          phone: guestPhone,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        },
+      )
+      console.log("Customer created/updated on Paystack:", customerResponse.data)
+    } catch (customerError) {
+      console.error(
+        "Customer creation failed:",
+        customerError.response ? customerError.response.data : customerError.message,
+      )
+    }
+
+    // Initialize payment with Paystack
+    const response = await axios.post(
+      `${PAYSTACK_BASE_URL}/transaction/initialize`,
+      {
+        email: guestEmail,
+        amount: Math.round(totalAmount * 100), // Convert to kobo
+        metadata: {
+          booking_type: "hotel_booking",
+          hotel_name: hotel.name,
+          room_type: roomType.name,
+          check_in: checkInDate,
+          check_out: checkOutDate,
+          nights: numberOfNights,
+          guests: numberOfGuests,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    )
+
+    console.log("Paystack API response:", response.data)
+
+    // Save booking details to Supabase
+    const bookingData = {
+      booking_reference: bookingReference,
+      guest_name: guestName,
+      guest_email: guestEmail,
+      guest_phone: guestPhone,
+      hotel_id: hotelId,
+      room_type_id: roomTypeId,
+      check_in_date: checkInDate,
+      check_out_date: checkOutDate,
+      number_of_guests: numberOfGuests,
+      number_of_nights: numberOfNights,
+      total_amount: totalAmount,
+      platform_commission: platformCommission,
+      hotel_amount: hotelAmount,
+      special_requests: specialRequests,
+      payment_reference: response.data.data.reference,
+      payment_status: "pending",
+      booking_status: "pending",
+    }
+
+    console.log("Attempting to save hotel booking to Supabase:", bookingData)
+
+    const { data, error } = await supabase.from("hotel_bookings").insert([bookingData])
+
+    if (error) {
+      console.error("Error saving hotel booking to Supabase:", error)
+      throw new Error(`Failed to save booking: ${error.message}`)
+    }
+
+    console.log("Hotel booking saved successfully:", data)
+
+    res.json(response.data)
+  } catch (error) {
+    console.error("Hotel booking initialization failed:", error.response ? error.response.data : error.message)
+    res.status(500).json({
+      error: "Failed to initialize hotel booking payment",
+      details: error.message,
+    })
+  }
+})
+
+// Verify hotel booking payment
+app.get("/api/verify-hotel-booking/:reference", async (req, res) => {
+  try {
+    const { reference } = req.params
+    console.log("Received hotel booking payment verification for reference:", reference)
+
+    // Verify payment with Paystack
+    const response = await axios.get(`${PAYSTACK_BASE_URL}/transaction/verify/${reference}`, {
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+    })
+
+    console.log("Paystack verification response:", JSON.stringify(response.data, null, 2))
+
+    const paymentStatus = response.data.data.status
+    let bookingStatus
+
+    switch (paymentStatus) {
+      case "success":
+        bookingStatus = "completed"
+        break
+      case "failed":
+        bookingStatus = "failed"
+        break
+      case "abandoned":
+        bookingStatus = "abandoned"
+        break
+      default:
+        bookingStatus = "pending"
+    }
+
+    // Update booking status in Supabase
+    const { data: updateData, error: updateError } = await supabase
+      .from("hotel_bookings")
+      .update({ payment_status: bookingStatus })
+      .eq("payment_reference", reference)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error("Error updating hotel booking payment status:", updateError)
+      throw new Error(`Failed to update payment status: ${updateError.message}`)
+    }
+
+    if (paymentStatus === "success") {
+      // Generate receipt number
+      const receiptNumber = `HTL-RCP-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+
+      // Update with receipt number
+      await supabase.from("hotel_bookings").update({ receipt_number: receiptNumber }).eq("payment_reference", reference)
+
+      // Get hotel and room type details for email
+      const { data: hotel } = await supabase.from("hotels").select("*").eq("id", updateData.hotel_id).single()
+
+      const { data: roomType } = await supabase
+        .from("room_types")
+        .select("*")
+        .eq("id", updateData.room_type_id)
+        .single()
+
+      // Send confirmation emails
+      await sendHotelBookingEmails(updateData, hotel, roomType, receiptNumber, response.data.data)
+
+      res.json({
+        status: bookingStatus,
+        message: `Payment ${bookingStatus}`,
+        bookingReference: updateData.booking_reference,
+        paymentDetails: response.data.data,
+      })
+    } else {
+      res.json({
+        status: bookingStatus,
+        message: `Payment ${bookingStatus}`,
+        paymentDetails: response.data.data,
+      })
+    }
+  } catch (error) {
+    console.error("Hotel booking payment verification failed:", error.response ? error.response.data : error.message)
+    res.status(500).json({
+      error: "Failed to verify hotel booking payment",
+      details: error.message,
+    })
+  }
+})
+
+// Function to send hotel booking confirmation emails
+async function sendHotelBookingEmails(booking, hotel, roomType, receiptNumber, paymentDetails) {
+  const paymentDate = new Date(paymentDetails.paid_at || Date.now()).toLocaleDateString()
+  const checkInDate = new Date(booking.check_in_date).toLocaleDateString()
+  const checkOutDate = new Date(booking.check_out_date).toLocaleDateString()
+
+  // Guest confirmation email HTML
+  const guestHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: #5A8E00;">Hotel Booking Confirmation</h1>
+        <p>Receipt #: ${receiptNumber}</p>
+        <p>Booking Reference: ${booking.booking_reference}</p>
+      </div>
+      
+      <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; border-left: 4px solid #5A8E00;">
+        <h2 style="color: #5A8E00; margin-top: 0;">What Happens Next?</h2>
+        <ol style="padding-left: 20px;">
+          <li style="margin-bottom: 10px;"><strong>Booking Coordination:</strong> Our team will contact ${hotel.name} within 2 hours to confirm your reservation.</li>
+          <li style="margin-bottom: 10px;"><strong>Hotel Confirmation:</strong> You'll receive final confirmation with check-in details within 24 hours.</li>
+          <li style="margin-bottom: 10px;"><strong>Check-in:</strong> Present this confirmation at the hotel reception on your arrival date.</li>
+        </ol>
+        <p><strong>Need immediate assistance?</strong> Contact our support team:</p>
+        <ul style="list-style-type: none; padding-left: 0;">
+          <li>📞 Phone: +234 XXX XXX XXXX</li>
+          <li>✉️ Email: bookings@experienceplateau.com</li>
+          <li>⏰ Support Hours: Monday-Friday, 9am-5pm</li>
+        </ul>
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <h2>Booking Details</h2>
+        <p><strong>Guest Name:</strong> ${booking.guest_name}</p>
+        <p><strong>Email:</strong> ${booking.guest_email}</p>
+        <p><strong>Phone:</strong> ${booking.guest_phone}</p>
+        <p><strong>Payment Date:</strong> ${paymentDate}</p>
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <h2>Hotel Information</h2>
+        <p><strong>Hotel:</strong> ${hotel.name}</p>
+        <p><strong>Location:</strong> ${hotel.location}</p>
+        <p><strong>Address:</strong> ${hotel.address}</p>
+        <p><strong>Contact:</strong> ${hotel.contact_phone}</p>
+        <p><strong>Email:</strong> ${hotel.contact_email}</p>
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <h2>Reservation Details</h2>
+        <p><strong>Room Type:</strong> ${roomType.name}</p>
+        <p><strong>Check-in Date:</strong> ${checkInDate}</p>
+        <p><strong>Check-out Date:</strong> ${checkOutDate}</p>
+        <p><strong>Number of Nights:</strong> ${booking.number_of_nights}</p>
+        <p><strong>Number of Guests:</strong> ${booking.number_of_guests}</p>
+        ${booking.special_requests ? `<p><strong>Special Requests:</strong> ${booking.special_requests}</p>` : ""}
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <h2>Payment Information</h2>
+        <p><strong>Total Amount:</strong> ₦${booking.total_amount.toLocaleString()}</p>
+        <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
+        <p><strong>Payment Status:</strong> Completed</p>
+      </div>
+
+      <div style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; text-align: center;">
+        <p>Thank you for booking with Experience Plateau! We're excited to help you enjoy your stay in Plateau State.</p>
+        <p>If you have any questions, please contact us at bookings@experienceplateau.com</p>
+      </div>
+    </div>
+  `
+
+  // Admin notification email HTML
+  const adminHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <h1 style="color: #5A8E00;">New Hotel Booking</h1>
+      <p>Receipt #: ${receiptNumber}</p>
+      <p>Booking Reference: ${booking.booking_reference}</p>
+      
+      <h2>Guest Information</h2>
+      <p><strong>Name:</strong> ${booking.guest_name}</p>
+      <p><strong>Email:</strong> ${booking.guest_email}</p>
+      <p><strong>Phone:</strong> ${booking.guest_phone}</p>
+      
+      <h2>Hotel Details</h2>
+      <p><strong>Hotel:</strong> ${hotel.name}</p>
+      <p><strong>Location:</strong> ${hotel.location}</p>
+      <p><strong>Hotel Contact:</strong> ${hotel.contact_phone}</p>
+      <p><strong>Hotel Email:</strong> ${hotel.contact_email}</p>
+      
+      <h2>Booking Details</h2>
+      <p><strong>Room Type:</strong> ${roomType.name}</p>
+      <p><strong>Check-in:</strong> ${checkInDate}</p>
+      <p><strong>Check-out:</strong> ${checkOutDate}</p>
+      <p><strong>Nights:</strong> ${booking.number_of_nights}</p>
+      <p><strong>Guests:</strong> ${booking.number_of_guests}</p>
+      <p><strong>Special Requests:</strong> ${booking.special_requests || "None"}</p>
+      
+      <h2>Payment Information</h2>
+      <p><strong>Total Amount:</strong> ₦${booking.total_amount.toLocaleString()}</p>
+      <p><strong>Platform Commission (10%):</strong> ₦${booking.platform_commission.toLocaleString()}</p>
+      <p><strong>Hotel Amount:</strong> ₦${booking.hotel_amount.toLocaleString()}</p>
+      <p><strong>Payment Date:</strong> ${paymentDate}</p>
+      <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
+      <p><strong>Payment Channel:</strong> ${paymentDetails.channel || "N/A"}</p>
+      
+      <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin-top: 20px;">
+        <h3 style="color: #856404; margin-top: 0;">Action Required</h3>
+        <p style="color: #856404; margin: 0;">Please contact ${hotel.name} immediately to confirm this reservation and coordinate room availability.</p>
+      </div>
+    </div>
+  `
+
+  // Hotel notification email HTML
+  const hotelHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd;">
+      <h1 style="color: #5A8E00;">New Booking Notification</h1>
+      <p>Dear ${hotel.name} Team,</p>
+      <p>You have received a new booking through Experience Plateau. Please find the details below:</p>
+      
+      <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h2>Booking Reference: ${booking.booking_reference}</h2>
+        <p><strong>Receipt #:</strong> ${receiptNumber}</p>
+      </div>
+      
+      <h2>Guest Information</h2>
+      <p><strong>Name:</strong> ${booking.guest_name}</p>
+      <p><strong>Email:</strong> ${booking.guest_email}</p>
+      <p><strong>Phone:</strong> ${booking.guest_phone}</p>
+      
+      <h2>Reservation Details</h2>
+      <p><strong>Room Type:</strong> ${roomType.name}</p>
+      <p><strong>Check-in Date:</strong> ${checkInDate}</p>
+      <p><strong>Check-out Date:</strong> ${checkOutDate}</p>
+      <p><strong>Number of Nights:</strong> ${booking.number_of_nights}</p>
+      <p><strong>Number of Guests:</strong> ${booking.number_of_guests}</p>
+      ${booking.special_requests ? `<p><strong>Special Requests:</strong> ${booking.special_requests}</p>` : ""}
+      
+      <h2>Payment Information</h2>
+      <p><strong>Total Booking Value:</strong> ₦${booking.total_amount.toLocaleString()}</p>
+      <p><strong>Your Amount (90%):</strong> ₦${booking.hotel_amount.toLocaleString()}</p>
+      <p><strong>Platform Fee (10%):</strong> ₦${booking.platform_commission.toLocaleString()}</p>
+      <p><strong>Payment Status:</strong> Completed</p>
+      
+      <div style="background-color: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
+        <h3 style="color: #155724; margin-top: 0;">Next Steps</h3>
+        <ol style="color: #155724; padding-left: 20px;">
+          <li>Please confirm room availability for the specified dates</li>
+          <li>Contact the guest directly to confirm check-in details</li>
+          <li>Prepare the ${roomType.name} for the guest's arrival</li>
+          <li>Payment will be processed to your account within 3-5 business days</li>
+        </ol>
+      </div>
+      
+      <p>If you have any questions about this booking, please contact Experience Plateau at bookings@experienceplateau.com</p>
+      
+      <p>Thank you for partnering with Experience Plateau!</p>
+    </div>
+  `
+
+  try {
+    // Send guest confirmation email
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: booking.guest_email,
+      Subject: `Hotel Booking Confirmation - ${hotel.name}`,
+      HtmlBody: guestHtml,
+      MessageStream: "outbound",
+    })
+
+    // Send admin notification
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: process.env.ADMIN_EMAIL || "bookings@experienceplateau.com",
+      Subject: `New Hotel Booking: ${hotel.name} - ${booking.guest_name}`,
+      HtmlBody: adminHtml,
+      MessageStream: "outbound",
+    })
+
+    // Send hotel notification
+    await client.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: hotel.contact_email || "bookings@experienceplateau.com",
+      Subject: `New Booking Notification - ${booking.booking_reference}`,
+      HtmlBody: hotelHtml,
+      MessageStream: "outbound",
+    })
+
+    console.log("Hotel booking confirmation emails sent successfully")
+  } catch (error) {
+    console.error("Error sending hotel booking emails:", error)
+  }
+}
+
+// ===== END HOTEL BOOKING ENDPOINTS =====
 
 // ADD DEBUG ENDPOINT TO CHECK DATABASE ENTRIES
 app.get("/api/debug-user-access/:email", async (req, res) => {
