@@ -12,6 +12,7 @@ const app = express()
 const port = process.env.PORT || 5000
 const nodemailer = require("nodemailer")
 
+const bookingRequestRoutes = require("./booking-request-routes")
 app.use(cors())
 app.use(express.json())
 
@@ -21,10 +22,14 @@ const PAYSTACK_BASE_URL = "https://api.paystack.co"
 // Create a client instance with your server token
 const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN)
 
+
+
 // Test route
 app.get("/", (req, res) => {
   res.json({ message: "Server is running!" })
 })
+
+app.use("/api", bookingRequestRoutes)
 
 // Supabase setup
 const supabaseUrl = process.env.SUPABASE_URL
