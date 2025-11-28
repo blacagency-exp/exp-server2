@@ -484,7 +484,7 @@ async function sendCustomerConfirmationEmail(bookingRequest) {
           <p>Reference Number: ${bookingRequest.id}</p>
           <p>Experience Plateau<br>
           📧 bookings@experienceplateau.com<br>
-          📞 +234-XXX-XXX-XXXX</p>
+          📞 +234-708-685-5211</p>
         </div>
       </div>
     </body>
@@ -573,7 +573,7 @@ async function sendApprovalEmail(bookingRequest) {
           <p>Reference Number: ${bookingRequest.id}</p>
           <p>Experience Plateau<br>
           📧 support@experienceplateau.com<br>
-          📞 +234-XXX-XXX-XXXX</p>
+          📞 +234-708-685-5211</p>
         </div>
       </div>
     </body>
@@ -639,7 +639,7 @@ async function sendRejectionEmail(bookingRequest) {
           <p>Reference Number: ${bookingRequest.id}</p>
           <p>Experience Plateau<br>
           📧 support@experienceplateau.com<br>
-          📞 +234-XXX-XXX-XXXX</p>
+          📞 +234-708-685-5211</p>
         </div>
       </div>
     </body>
@@ -731,7 +731,7 @@ async function sendPaymentConfirmationEmail(bookingRequest, paymentReference) {
           <p>Payment Reference: ${paymentReference}</p>
           <p>Experience Plateau<br>
           📧 bookings@experienceplateau.com<br>
-          📞 +234-XXX-XXX-XXXX</p>
+          📞 +234-708-685-5211</p>
         </div>
       </div>
     </body>

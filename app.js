@@ -398,7 +398,7 @@ async function sendHotelBookingEmails(booking, hotel, roomType, receiptNumber, p
         </ol>
         <p><strong>Need immediate assistance?</strong> Contact our support team:</p>
         <ul style="list-style-type: none; padding-left: 0;">
-          <li>📞 Phone: +234 XXX XXX XXXX</li>
+          <li>📞 Phone: +234 708 685 5211</li>
           <li>✉️ Email: bookings@experienceplateau.com</li>
           <li>⏰ Support Hours: Monday-Friday, 9am-5pm</li>
         </ul>
@@ -1101,7 +1101,7 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
         </ol>
         <p><strong>Need immediate assistance?</strong> Contact our support team:</p>
         <ul style="list-style-type: none; padding-left: 0;">
-          <li>📞 Phone: +234 XXX XXX XXXX</li>
+         <li>📞 Phone: +234 708 685 5211</li>
           <li>✉️ Email: support@experienceplateau.com</li>
           <li>⏰ Support Hours: Monday-Friday, 9am-5pm</li>
         </ul>
