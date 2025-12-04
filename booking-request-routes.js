@@ -35,6 +35,8 @@ router.post("/booking-requests", async (req, res) => {
       specificRequests,
       selectedGuideId,
       totalAmount,
+      displayCurrency,
+      displayAmount,
     } = req.body
 
     console.log(" Received booking request")
@@ -55,6 +57,8 @@ router.post("/booking-requests", async (req, res) => {
           specific_requests: specificRequests || "None",
           guide_id: selectedGuideId,
           estimated_amount: totalAmount,
+           display_currency: displayCurrency || "NGN",
+          display_amount: displayAmount || totalAmount,
           status: "pending",
         },
       ])
@@ -386,7 +390,7 @@ async function sendAdminNotificationEmail(bookingRequest) {
             <span class="detail-label">Number of Travelers:</span> ${bookingRequest.group_size}
           </div>
           <div class="detail-row">
-            <span class="detail-label">Estimated Amount:</span> ₦${bookingRequest.estimated_amount.toLocaleString()}
+            <span class="detail-label">Estimated Amount:</span> ${bookingRequest.display_currency} ${bookingRequest.display_amount.toLocaleString()}
           </div>
           <div class="detail-row">
             <span class="detail-label">Guide ID:</span> ${bookingRequest.guide_id || "Not selected"}
@@ -464,7 +468,7 @@ async function sendCustomerConfirmationEmail(bookingRequest) {
             <span class="detail-label">Number of Travelers:</span> ${bookingRequest.group_size}
           </div>
           <div class="detail-row">
-            <span class="detail-label">Estimated Amount:</span> ₦${bookingRequest.estimated_amount.toLocaleString()}
+            <span class="detail-label">Estimated Amount:</span> ${bookingRequest.display_currency} ${bookingRequest.display_amount.toLocaleString()}
           </div>
           
           <p><strong>What happens next?</strong></p>
@@ -543,7 +547,7 @@ async function sendApprovalEmail(bookingRequest) {
             <span class="detail-label">Number of Travelers:</span> ${bookingRequest.group_size}
           </div>
           <div class="detail-row">
-            <span class="detail-label">Total Amount:</span> ₦${bookingRequest.estimated_amount.toLocaleString()}
+            <span class="detail-label">Total Amount:</span> ${bookingRequest.display_currency} ${bookingRequest.display_amount.toLocaleString()}
           </div>
           
           <h3>Next Steps:</h3>
@@ -704,7 +708,7 @@ async function sendPaymentConfirmationEmail(bookingRequest, paymentReference) {
             <span class="detail-label">Number of Travelers:</span> ${bookingRequest.group_size}
           </div>
           <div class="detail-row">
-            <span class="detail-label">Amount Paid:</span> ₦${bookingRequest.estimated_amount.toLocaleString()}
+            <span class="detail-label">Amount Paid:</span> ${bookingRequest.display_currency} ${bookingRequest.display_amount.toLocaleString()}
           </div>
           
           <h3>What's Next?</h3>
@@ -823,9 +827,9 @@ async function sendAdminPaymentNotification(bookingRequest, paymentReference, pa
           }
           
           <h3>Payment Information:</h3>
-          <div class="detail-row">
+           <div class="detail-row">
             <span class="detail-label">Amount Paid:</span>
-            <span class="amount">₦${bookingRequest.estimated_amount.toLocaleString()}</span>
+            <span class="amount">${bookingRequest.display_currency} ${bookingRequest.display_amount.toLocaleString()}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Payment Reference:</span>
