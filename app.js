@@ -13,6 +13,7 @@ const port = process.env.PORT || 5000
 const nodemailer = require("nodemailer")
 
 const bookingRequestRoutes = require("./booking-request-routes")
+const shopRequestRoutes = require("./shop-request-routes")
 app.use(cors())
 app.use(express.json())
 
@@ -30,6 +31,7 @@ app.get("/", (req, res) => {
 })
 
 app.use("/api", bookingRequestRoutes)
+app.use("/api", shopRequestRoutes)
 
 // Supabase setup
 const supabaseUrl = process.env.SUPABASE_URL
@@ -1701,6 +1703,7 @@ async function sendVirtualTourAccessEmail(payment, receiptNumber, paymentDetails
     console.error("Error sending virtual tour access emails:", error)
   }
 }
+
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`)
