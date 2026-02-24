@@ -14,7 +14,7 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY
 const supabase = createClient(supabaseUrl, supabaseKey)
 
 // Sanity setup
-const sanityProjectID = 'j3cmddgo'
+const sanityProjectID = process.env.SANITY_PROJECT_ID
 const sanityClient = createSanityClient({
   projectId: sanityProjectID,
   dataset: 'production',
