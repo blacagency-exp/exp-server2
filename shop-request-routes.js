@@ -16,7 +16,7 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 // Sanity setup
 const sanityProjectID = process.env.SANITY_PROJECT_ID
 const sanityClient = createSanityClient({
-  projectId: sanityProjectID,
+  projectId: '252rx5c8',
   dataset: 'production',
   apiVersion: '2023-05-03',
   useCdn: false, // Set to false to get fresh data
