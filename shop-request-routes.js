@@ -14,7 +14,6 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY
 const supabase = createClient(supabaseUrl, supabaseKey)
 
 // Sanity setup
-const sanityProjectID = process.env.SANITY_PROJECT_ID
 const sanityClient = createSanityClient({
   projectId: '252rx5c8',
   dataset: 'production',
@@ -65,15 +64,31 @@ router.post("/shop/initialize-payment", async (req, res) => {
       }
     })
 
-    // 2. Apply discount if code is 5 digits
-    let discountApplied = 0
-    let totalAmount = subtotal
-    if (discountCode && discountCode.length === 5) {
-      discountApplied = subtotal * 0.1
-      totalAmount = subtotal - discountApplied
+    // 2. Calculate Delivery Fee (Security: recalculate on server)
+    let deliveryFee = 0
+
+    if (req.body.selectedState) {
+      if (req.body.isJos) {
+        deliveryFee = 1500
+      } else if (req.body.selectedState === "Plateau") {
+        deliveryFee = 3000
+      } else {
+        deliveryFee = 5000
+      }
     }
 
-    // 3. Initialize Paystack
+
+    // 3. Apply discount if code matches: 2 letters + 3 numbers
+    let discountApplied = 0
+    let discountIsValid = false
+    if (discountCode && /^[a-zA-Z]{2}\d{3}$/.test(discountCode)) {
+      discountIsValid = true
+      discountApplied = subtotal * 0.1
+    }
+
+    const totalAmount = subtotal - discountApplied + deliveryFee
+
+    // 4. Initialize Paystack
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
       {
@@ -84,7 +99,9 @@ router.post("/shop/initialize-payment", async (req, res) => {
         metadata: {
           payment_type: "shop_merch",
           items: verifiedItems,
-          delivery_address: deliveryAddress
+          delivery_address: deliveryAddress,
+          delivery_fee: deliveryFee,
+          selected_state: req.body.selectedState
         }
       },
       {
@@ -95,7 +112,7 @@ router.post("/shop/initialize-payment", async (req, res) => {
       }
     )
 
-    // 4. Save to Supabase (shop_payments table)
+    // 5. Save to Supabase (shop_payments table)
     const paymentData = {
       email,
       first_name: firstName,
@@ -103,12 +120,17 @@ router.post("/shop/initialize-payment", async (req, res) => {
       phone,
       items: verifiedItems,
       subtotal,
+      delivery_fee: deliveryFee,
       discount_applied: discountApplied,
       total_amount: totalAmount,
       payment_reference: response.data.data.reference,
       payment_status: "pending",
       delivery_address: deliveryAddress,
-      discount_code: discountCode
+      discount_code: discountIsValid ? discountCode : null,
+      delivery_metadata: {
+        selected_state: req.body.selectedState,
+        is_jos: req.body.isJos
+      }
     }
 
     const { error: supabaseError } = await supabase
@@ -116,13 +138,50 @@ router.post("/shop/initialize-payment", async (req, res) => {
       .insert([paymentData])
 
     if (supabaseError) {
-      console.error("Error saving shop payment to Supabase:", supabaseError)
+      console.error("CRITICAL: Supabase Insert Failed:", {
+        message: supabaseError.message,
+        details: supabaseError.details,
+        hint: supabaseError.hint,
+        code: supabaseError.code,
+        data_attempted: paymentData
+      });
+      return res.status(500).json({ 
+        error: "Failed to record order in database. Your payment was not processed.", 
+        details: supabaseError.message 
+      });
     }
 
     res.json(response.data)
   } catch (error) {
     console.error("Shop payment initialization failed:", error.message)
     res.status(500).json({ error: "Failed to initialize shop payment", details: error.message })
+  }
+})
+
+// Newsletter subscription
+router.post("/newsletter/subscribe", async (req, res) => {
+  try {
+    const { email } = req.body
+
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "Valid email is required" })
+    }
+
+    const { data, error } = await supabase
+      .from("newsletter_subscriptions")
+      .insert([{ email }])
+
+    if (error) {
+      if (error.code === '23505') { // Unique violation
+        return res.status(400).json({ error: "This email is already subscribed!" })
+      }
+      throw error
+    }
+
+    res.json({ success: true, message: "Subscribed successfully!" })
+  } catch (error) {
+    console.error("Newsletter subscription failed:", error.message)
+    res.status(500).json({ error: "Failed to subscribe. Please try again later." })
   }
 })
 
@@ -156,6 +215,10 @@ router.get("/shop/verify-payment/:reference", async (req, res) => {
 
     if (updateError) {
       console.error("Error updating shop payment status:", updateError)
+      return res.status(updateError.code === 'PGRST116' ? 404 : 500).json({ 
+        error: "Order record not found or update failed.", 
+        details: updateError.message 
+      })
     }
 
     if (paymentStatus === "success" && updateData) {
@@ -236,6 +299,7 @@ async function sendShopOrderAdminEmail(paymentData) {
           
           <div class="total-section">
             <div class="detail-row"><span class="label">Subtotal:</span> ₦${parseFloat(paymentData.subtotal).toLocaleString()}</div>
+            ${paymentData.delivery_fee > 0 ? `<div class="detail-row"><span class="label">Shipping:</span> ₦${parseFloat(paymentData.delivery_fee).toLocaleString()}</div>` : ''}
             ${paymentData.discount_applied > 0 ? `<div class="detail-row"><span class="label">Discount:</span> -₦${parseFloat(paymentData.discount_applied).toLocaleString()} (${paymentData.discount_code})</div>` : ''}
             <div class="detail-row" style="font-size: 18px; margin-top: 10px;"><span class="label">Total Amount Paid:</span> ₦${parseFloat(paymentData.total_amount).toLocaleString()}</div>
           </div>
