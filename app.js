@@ -731,6 +731,73 @@ app.post("/api/subscribe", async (req, res) => {
   }
 })
 
+app.post("/api/leaderboard-signup", async (req, res) => {
+  const { full_name, email } = req.body
+  console.log("Leaderboard signup request:", { full_name, email })
+
+  if (!full_name || !full_name.trim()) {
+    return res.status(400).json({ message: "Full name is required" })
+  }
+  if (!email || !/\S+@\S+\.\S+/.test(email)) {
+    return res.status(400).json({ message: "Invalid email address" })
+  }
+
+  try {
+    const { data: existing, error: checkError } = await supabase
+      .from("leaderboard_signups")
+      .select("email")
+      .eq("email", email.trim())
+
+    if (checkError) {
+      console.error("Error checking existing signup:", checkError)
+      return res.status(500).json({ message: "Failed to check existing signup" })
+    }
+
+    if (existing && existing.length > 0) {
+      return res.status(409).json({ message: "Email already registered" })
+    }
+
+    const { data, error } = await supabase
+      .from("leaderboard_signups")
+      .insert([{ full_name: full_name.trim(), email: email.trim() }])
+
+    if (error) {
+      console.error("Error saving leaderboard signup:", error)
+      return res.status(500).json({ message: "Failed to save signup", error })
+    }
+
+    console.log("Leaderboard signup saved:", data)
+    res.status(200).json({ message: "Signup successful" })
+  } catch (error) {
+    console.error("Unexpected error during leaderboard signup:", error)
+    res.status(500).json({ message: "Internal server error", error: error.message })
+  }
+})
+
+app.get("/api/leaderboard-signups", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("leaderboard_signups")
+      .select("*")
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      console.error("Error fetching leaderboard signups:", error)
+      return res.status(500).json({ message: "Failed to fetch signups" })
+    }
+
+    res.status(200).json(data)
+  } catch (error) {
+    console.error("Error retrieving leaderboard signups:", error)
+    res.status(500).json({ message: "Internal server error", error: error.message })
+  }
+})
+
+
+  
+  
+
+
 app.get("/api/subscribers", async (req, res) => {
   try {
     const { data, error } = await supabase.from("subscribers").select("*").order("created_at", { ascending: false })
