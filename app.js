@@ -902,13 +902,14 @@ app.post("/api/initialize-payment", async (req, res) => {
       payment_reference: response.data.data.reference,
       payment_status: "pending",
       first_name: metadata.full_name.split(" ")[0],
-      last_name: metadata.full_name.split(" ")[1],
+      last_name: metadata.full_name.split(" ").slice(1).join(" "),
       phone_number: metadata.phone_number,
       package_type: metadata.package_type,
       traveler_type: metadata.traveler_type,
       group_size: metadata.group_size,
       specific_requests: metadata.specific_requests,
       guide_id: metadata.guide_id,
+      travel_date: metadata.travel_date,
     }
 
     console.log("Attempting to save booking data to Supabase:", bookingData)
@@ -1153,11 +1154,13 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
         <p><strong>Name:</strong> ${booking.first_name} ${booking.last_name}</p>
         <p><strong>Email:</strong> ${booking.email}</p>
         <p><strong>Phone:</strong> ${booking.phone_number}</p>
-        <p><strong>Date:</strong> ${paymentDate}</p>
         <p><strong>Package:</strong> ${booking.package_type}</p>
+        <p><strong>Travel Date:</strong> ${booking.travel_date ? new Date(booking.travel_date).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) : "N/A"}</p>
         <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
         ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ""}
+        ${booking.specific_requests && booking.specific_requests !== "None" ? `<p><strong>Special Requests:</strong> ${booking.specific_requests}</p>` : ""}
         <p><strong>Amount Paid:</strong> ₦${(booking.amount).toLocaleString()}</p>
+        <p><strong>Payment Date:</strong> ${paymentDate}</p>
         <p><strong>Payment Reference:</strong> ${booking.payment_reference}</p>
       </div>
       
@@ -1197,10 +1200,11 @@ async function sendReceiptEmails(booking, receiptNumber, paymentDetails) {
       
       <h2>Booking Details</h2>
       <p><strong>Package:</strong> ${booking.package_type}</p>
+      <p><strong>Travel Date:</strong> ${booking.travel_date ? new Date(booking.travel_date).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) : "N/A"}</p>
       <p><strong>Traveler Type:</strong> ${booking.traveler_type}</p>
       ${booking.group_size ? `<p><strong>Group Size:</strong> ${booking.group_size}</p>` : ""}
-      <p><strong>Specific Requests:</strong> ${booking.specific_requests}</p>
-      
+      <p><strong>Specific Requests:</strong> ${booking.specific_requests || "None"}</p>
+
       <h2>Payment Information</h2>
       <p><strong>Amount:</strong> ₦${(booking.amount).toLocaleString()}</p>
       <p><strong>Payment Date:</strong> ${paymentDate}</p>
