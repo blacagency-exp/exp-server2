@@ -1,4 +1,4 @@
 const app = require("./app")
 
-// Export the Express API
+// export the Express API
 module.exports = app
