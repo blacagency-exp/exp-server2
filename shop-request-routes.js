@@ -328,4 +328,179 @@ async function sendShopOrderAdminEmail(paymentData) {
   }
 }
 
+// ─── Plateau United Routes ───────────────────────────────────────────────────
+
+const PU_PRICES = {
+  "Home Kit":       15000,
+  "Away Kit":       15000,
+  "Alternate Kit":  15000,
+  "Training Kit":   25000,
+  "Hoodie":         40000,
+  "Tracksuit":      50000,
+}
+
+router.post("/plateau-united/initialize-payment", async (req, res) => {
+  try {
+    const { email, firstName, lastName, phone, kitName, size, quantity, deliveryAddress } = req.body
+
+    if (!PU_PRICES[kitName]) {
+      return res.status(400).json({ error: "Invalid kit selected" })
+    }
+
+    const unitPrice = PU_PRICES[kitName]
+    const totalAmount = unitPrice * (quantity || 1)
+
+    const response = await axios.post(
+      `${PAYSTACK_BASE_URL}/transaction/initialize`,
+      {
+        email,
+        amount: totalAmount * 100, // kobo
+        channels: ["card", "bank", "ussd", "bank_transfer"],
+        metadata: {
+          payment_type: "plateau_united",
+          kit_name: kitName,
+          size,
+          quantity: quantity || 1,
+          first_name: firstName,
+          last_name: lastName,
+          phone,
+          delivery_address: deliveryAddress,
+        }
+      },
+      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, "Content-Type": "application/json" } }
+    )
+
+    const { error: supabaseError } = await supabase
+      .from("plateau_united_orders")
+      .insert([{
+        email,
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        kit_name: kitName,
+        size,
+        quantity: quantity || 1,
+        unit_price: unitPrice,
+        total_amount: totalAmount,
+        delivery_address: deliveryAddress,
+        payment_reference: response.data.data.reference,
+        payment_status: "pending",
+      }])
+
+    if (supabaseError) {
+      console.error("Supabase insert failed:", supabaseError)
+      return res.status(500).json({ error: "Failed to record order", details: supabaseError.message })
+    }
+
+    res.json(response.data)
+  } catch (error) {
+    console.error("PU payment init failed:", error.message)
+    res.status(500).json({ error: "Failed to initialize payment", details: error.message })
+  }
+})
+
+router.get("/plateau-united/verify-payment/:reference", async (req, res) => {
+  try {
+    const { reference } = req.params
+
+    const response = await axios.get(`${PAYSTACK_BASE_URL}/transaction/verify/${reference}`, {
+      headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` }
+    })
+
+    const paystackStatus = response.data.data.status
+    const dbStatus = paystackStatus === "success" ? "completed" : paystackStatus === "failed" ? "failed" : "pending"
+
+    const { data: order, error: updateError } = await supabase
+      .from("plateau_united_orders")
+      .update({ payment_status: dbStatus })
+      .eq("payment_reference", reference)
+      .select()
+      .single()
+
+    if (updateError) {
+      return res.status(500).json({ error: "Failed to update order", details: updateError.message })
+    }
+
+    if (paystackStatus === "success" && order) {
+      await sendPUCustomerEmail(order)
+      await sendPUAdminEmail(order)
+    }
+
+    res.json({ status: dbStatus, message: `Payment ${dbStatus}` })
+  } catch (error) {
+    console.error("PU payment verify failed:", error.message)
+    res.status(500).json({ error: "Failed to verify payment", details: error.message })
+  }
+})
+
+async function sendPUCustomerEmail(order) {
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:600px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#1A6B2C;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">Order Confirmed!</h1>
+        <p style="color:#fff;margin:8px 0 0;">Plateau United Official Merchandise</p>
+      </div>
+      <div style="padding:24px;">
+        <p>Hi ${order.first_name}, your order has been confirmed and payment received.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr style="background:#f8f8f8;"><th style="padding:10px;text-align:left;">Item</th><th style="padding:10px;text-align:left;">Details</th></tr>
+          <tr><td style="padding:10px;border-bottom:1px solid #eee;"><strong>${order.kit_name}</strong></td><td style="padding:10px;border-bottom:1px solid #eee;">Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}</td></tr>
+        </table>
+        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
+        <p><strong>Amount Paid:</strong> ₦${order.total_amount.toLocaleString()}</p>
+        <p><strong>Reference:</strong> ${order.payment_reference}</p>
+        <p style="margin-top:24px;">Our team will reach out to confirm delivery. For enquiries contact <a href="mailto:bookings@experienceplateau.com">bookings@experienceplateau.com</a>.</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await postmarkClient.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: order.email,
+      Subject: `Your Plateau United ${order.kit_name} Order is Confirmed!`,
+      HtmlBody: html,
+      MessageStream: "outbound"
+    })
+  } catch (e) {
+    console.error("PU customer email failed:", e)
+  }
+}
+
+async function sendPUAdminEmail(order) {
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:600px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#141E03;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">New Plateau United Order</h1>
+      </div>
+      <div style="padding:24px;">
+        <p><strong>Customer:</strong> ${order.first_name} ${order.last_name}</p>
+        <p><strong>Email:</strong> ${order.email}</p>
+        <p><strong>Phone:</strong> ${order.phone}</p>
+        <p><strong>Kit:</strong> ${order.kit_name}</p>
+        <p><strong>Size:</strong> ${order.size}</p>
+        <p><strong>Quantity:</strong> ${order.quantity}</p>
+        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
+        <p><strong>Amount Paid:</strong> ₦${order.total_amount.toLocaleString()}</p>
+        <p><strong>Reference:</strong> ${order.payment_reference}</p>
+        <p style="color:#777;font-size:12px;">Received: ${new Date().toLocaleString()}</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await postmarkClient.sendEmail({
+      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
+      To: process.env.ADMIN_EMAIL || "bookings@experienceplateau.com",
+      Subject: `New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
+      HtmlBody: html,
+      MessageStream: "outbound"
+    })
+  } catch (e) {
+    console.error("PU admin email failed:", e)
+  }
+}
+
 module.exports = router
