@@ -4,6 +4,16 @@ const { createClient } = require("@supabase/supabase-js")
 const { createClient: createSanityClient } = require("@sanity/client")
 const axios = require("axios")
 const postmark = require("postmark")
+const nodemailer = require("nodemailer")
+
+// Gmail SMTP transporter for Plateau United emails
+const gmailTransporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+})
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 const PAYSTACK_BASE_URL = "https://api.paystack.co"
@@ -450,19 +460,19 @@ async function sendPUCustomerEmail(order) {
         <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
         <p><strong>Amount Paid:</strong> ₦${order.total_amount.toLocaleString()}</p>
         <p><strong>Reference:</strong> ${order.payment_reference}</p>
-        <p style="margin-top:24px;">Our team will reach out to confirm delivery. For enquiries contact <a href="mailto:bookings@experienceplateau.com">bookings@experienceplateau.com</a>.</p>
+        <p style="margin-top:24px;">Our team will reach out to confirm delivery. For enquiries reply to this email or contact <a href="mailto:Plateauunitedsales@gmail.com">Plateauunitedsales@gmail.com</a>.</p>
       </div>
     </div>
     </body></html>
   `
   try {
-    await postmarkClient.sendEmail({
-      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
-      To: order.email,
-      Subject: `Your Plateau United ${order.kit_name} Order is Confirmed!`,
-      HtmlBody: html,
-      MessageStream: "outbound"
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: order.email,
+      subject: `Your Plateau United ${order.kit_name} Order is Confirmed!`,
+      html,
     })
+    console.log("PU customer email sent via Gmail")
   } catch (e) {
     console.error("PU customer email failed:", e)
   }
@@ -491,13 +501,13 @@ async function sendPUAdminEmail(order) {
     </body></html>
   `
   try {
-    await postmarkClient.sendEmail({
-      From: process.env.EMAIL_FROM || "bookings@experienceplateau.com",
-      To: process.env.ADMIN_EMAIL || "bookings@experienceplateau.com",
-      Subject: `New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
-      HtmlBody: html,
-      MessageStream: "outbound"
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: process.env.GMAIL_USER,
+      subject: `New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
+      html,
     })
+    console.log("PU admin email sent via Gmail")
   } catch (e) {
     console.error("PU admin email failed:", e)
   }
