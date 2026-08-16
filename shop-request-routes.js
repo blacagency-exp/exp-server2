@@ -4,6 +4,16 @@ const { createClient } = require("@supabase/supabase-js")
 const { createClient: createSanityClient } = require("@sanity/client")
 const axios = require("axios")
 const postmark = require("postmark")
+const nodemailer = require("nodemailer")
+
+// Gmail SMTP transporter for Plateau United emails
+const gmailTransporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+})
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY
 const PAYSTACK_BASE_URL = "https://api.paystack.co"
@@ -325,6 +335,302 @@ async function sendShopOrderAdminEmail(paymentData) {
     console.log("Shop order admin notification email sent successfully")
   } catch (error) {
     console.error("Error sending shop order admin notification email:", error)
+  }
+}
+
+// ─── Lint Payment Integration ─────────────────────────────────────────────────
+
+const LINT_BASE_URL = process.env.LINT_BASE_URL || "https://develop.lint.finance"
+
+// In-memory token cache — survives across requests within one server instance
+let lintTokenCache = { token: null, expiresAt: 0 }
+
+async function getLintToken() {
+  if (lintTokenCache.token && Date.now() < lintTokenCache.expiresAt) {
+    return lintTokenCache.token
+  }
+  const { data } = await axios.post(`${LINT_BASE_URL}/api/partner/v1/oauth/token`, {
+    grant_type: "client_credentials",
+    client_id: process.env.LINT_CLIENT_ID,
+    client_secret: process.env.LINT_CLIENT_SECRET,
+    scope: "",
+  }, { headers: { "Content-Type": "application/json", Accept: "application/json" } })
+
+  lintTokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + 55 * 60 * 1000, // refresh 5 minutes before expiry
+  }
+  return data.access_token
+}
+
+function lintHeaders(token) {
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json" }
+}
+
+// ─── Plateau United Routes ───────────────────────────────────────────────────
+
+const PU_PRICES = {
+  "Home Kit":       15000,
+  "Away Kit":       15000,
+  "Alternate Kit":  15000,
+  "Training Kit":   25000,
+  "Hoodie":         40000,
+  "Tracksuit":      50000,
+}
+
+const PU_DELIVERY_FEES = {
+  A: 1500, B: 2000, C: 2500, D: 3000, E: 3750,
+  interstate: 0,
+}
+
+router.post("/plateau-united/initialize-payment", async (req, res) => {
+  try {
+    const {
+      email, firstName, lastName, phone,
+      kitName, size, quantity,
+      deliveryAddress, deliveryZone, deliveryFee, isInterstate,
+    } = req.body
+
+    // Server-side price verification
+    if (!PU_PRICES[kitName]) {
+      return res.status(400).json({ error: "Invalid kit selected" })
+    }
+    const unitPrice = PU_PRICES[kitName]
+    const qty = Math.max(1, parseInt(quantity) || 1)
+
+    // Server-side delivery fee verification
+    const zoneFee = isInterstate ? 0 : (PU_DELIVERY_FEES[deliveryZone] ?? null)
+    if (!isInterstate && zoneFee === null) {
+      return res.status(400).json({ error: "Invalid delivery zone" })
+    }
+    if (!isInterstate && zoneFee !== parseInt(deliveryFee)) {
+      return res.status(400).json({ error: "Delivery fee mismatch" })
+    }
+
+    const totalAmount = unitPrice * qty + (isInterstate ? 0 : zoneFee)
+
+    // Generate a unique reference
+    const reference = `PU-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+    // Create Lint virtual account
+    const token = await getLintToken()
+    const callbackUrl = `${process.env.SERVER_URL || "https://exp-server2-seven.vercel.app"}/api/plateau-united/lint-webhook`
+
+    const { data: lintData } = await axios.post(
+      `${LINT_BASE_URL}/api/partner/v1/payments/virtual-accounts`,
+      {
+        amount: totalAmount * 100, // kobo
+        currency: "NGN",
+        reference,
+        callback_url: callbackUrl,
+        amount_control: "FIXED",
+        validity: 3600,
+      },
+      { headers: lintHeaders(token) }
+    )
+
+    const account = lintData.data
+
+    // Save order to Supabase — store Lint account id as payment_reference for lookup
+    const { error: supabaseError } = await supabase
+      .from("plateau_united_orders")
+      .insert([{
+        email,
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        kit_name: kitName,
+        size,
+        quantity: qty,
+        unit_price: unitPrice,
+        delivery_fee: isInterstate ? 0 : zoneFee,
+        delivery_zone: isInterstate ? "interstate" : deliveryZone,
+        delivery_address: deliveryAddress,
+        is_interstate: !!isInterstate,
+        total_amount: totalAmount,
+        payment_reference: account.id,   // Lint virtual account UUID
+        lint_reference: reference,        // our generated reference string
+        payment_status: "pending",
+      }])
+
+    if (supabaseError) {
+      console.error("Supabase PU insert failed:", supabaseError)
+      return res.status(500).json({ error: "Failed to record order", details: supabaseError.message })
+    }
+
+    res.json({ data: account })
+  } catch (error) {
+    const detail = error.response?.data || error.message
+    console.error("PU payment init failed:", detail)
+    res.status(500).json({ error: "Failed to initialize payment", details: detail })
+  }
+})
+
+// Poll payment status (called by frontend "I've made the transfer" button)
+router.get("/plateau-united/verify-payment/:accountId", async (req, res) => {
+  try {
+    const { accountId } = req.params
+
+    const token = await getLintToken()
+    const { data: lintData } = await axios.get(
+      `${LINT_BASE_URL}/api/partner/v1/payments/virtual-accounts/${accountId}/payment-status`,
+      { headers: lintHeaders(token) }
+    )
+
+    const lintStatus = lintData.data.payment_status // "PENDING" | "SUCCESSFUL" | "FAILED"
+    const dbStatus = lintStatus === "SUCCESSFUL" ? "completed" : lintStatus === "FAILED" ? "failed" : "pending"
+
+    // Update order only when status changes to terminal state
+    if (lintStatus === "SUCCESSFUL" || lintStatus === "FAILED") {
+      const { data: order, error: updateError } = await supabase
+        .from("plateau_united_orders")
+        .update({ payment_status: dbStatus })
+        .eq("payment_reference", accountId)
+        .select()
+        .single()
+
+      if (!updateError && order && lintStatus === "SUCCESSFUL") {
+        await sendPUCustomerEmail(order)
+        await sendPUAdminEmail(order)
+      }
+    }
+
+    res.json({ payment_status: lintStatus, status: dbStatus })
+  } catch (error) {
+    const detail = error.response?.data || error.message
+    console.error("PU payment verify failed:", detail)
+    res.status(500).json({ error: "Failed to verify payment", details: detail })
+  }
+})
+
+// Lint webhook — receives push notifications when payment completes
+router.post("/plateau-united/lint-webhook", async (req, res) => {
+  try {
+    const event = req.body
+    console.log("Lint webhook received:", JSON.stringify(event))
+
+    // Lint sends the virtual account object with payment_status
+    const lintStatus = event?.payment_status || event?.data?.payment_status
+    const accountId = event?.id || event?.data?.id
+
+    if (lintStatus === "SUCCESSFUL" && accountId) {
+      const { data: order, error } = await supabase
+        .from("plateau_united_orders")
+        .update({ payment_status: "completed" })
+        .eq("payment_reference", accountId)
+        .eq("payment_status", "pending") // idempotency guard
+        .select()
+        .single()
+
+      if (!error && order) {
+        await sendPUCustomerEmail(order)
+        await sendPUAdminEmail(order)
+        console.log("PU webhook: order fulfilled for", order.email)
+      }
+    }
+
+    res.json({ received: true })
+  } catch (error) {
+    console.error("Lint webhook error:", error.message)
+    res.status(500).json({ error: "Webhook processing failed" })
+  }
+})
+
+async function sendPUCustomerEmail(order) {
+  const deliveryNote = order.is_interstate
+    ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;border-radius:6px;"><strong>⭐ Manual Dispatch</strong> — Our team will contact you on WhatsApp (${order.phone}) to arrange interstate delivery.</p>`
+    : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — expect delivery within 1–3 business days via Bamjiye.</p>`
+
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:600px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#1A6B2C;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">Order Confirmed!</h1>
+        <p style="color:#fff;margin:8px 0 0;">Plateau United Official Merchandise</p>
+      </div>
+      <div style="padding:24px;">
+        <p>Hi ${order.first_name}, your order has been confirmed and payment received.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr style="background:#f8f8f8;">
+            <th style="padding:10px;text-align:left;">Item</th>
+            <th style="padding:10px;text-align:left;">Details</th>
+            <th style="padding:10px;text-align:left;">Amount</th>
+          </tr>
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #eee;"><strong>${order.kit_name}</strong></td>
+            <td style="padding:10px;border-bottom:1px solid #eee;">Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}</td>
+            <td style="padding:10px;border-bottom:1px solid #eee;">₦${order.unit_price.toLocaleString()}</td>
+          </tr>
+          ${order.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${order.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${order.delivery_fee.toLocaleString()}</td></tr>` : ""}
+          <tr style="background:#f8f8f8;">
+            <td style="padding:10px;" colspan="2"><strong>Total Paid</strong></td>
+            <td style="padding:10px;"><strong>₦${order.total_amount.toLocaleString()}</strong></td>
+          </tr>
+        </table>
+        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
+        ${deliveryNote}
+        <p><strong>Reference:</strong> <code>${order.lint_reference || order.payment_reference}</code></p>
+        <p style="margin-top:24px;color:#555;">For enquiries contact <a href="mailto:Plateauunitedsales@gmail.com">Plateauunitedsales@gmail.com</a> or reply to this email.</p>
+        <p style="margin-top:8px;font-size:11px;color:#999;">Delivered by Bamjiye Logistics · Official merchandise by Galaxy × Experience Plateau × Plateau United FC</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: order.email,
+      subject: `Your Plateau United ${order.kit_name} Order is Confirmed!`,
+      html,
+    })
+    console.log("PU customer email sent via Gmail to", order.email)
+  } catch (e) {
+    console.error("PU customer email failed:", e)
+  }
+}
+
+async function sendPUAdminEmail(order) {
+  const dispatchFlag = order.is_interstate
+    ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;"><strong>⭐ INTERSTATE ORDER — Manual dispatch required.</strong> Contact customer on WhatsApp: ${order.phone}</p>`
+    : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — Bamjiye</p>`
+
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:600px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#141E03;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">New Plateau United Order</h1>
+        <p style="color:#aaa;margin:4px 0 0;">Payment Confirmed via Lint</p>
+      </div>
+      <div style="padding:24px;">
+        ${dispatchFlag}
+        <p><strong>Customer:</strong> ${order.first_name} ${order.last_name}</p>
+        <p><strong>Email:</strong> ${order.email}</p>
+        <p><strong>Phone / WhatsApp:</strong> ${order.phone}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+        <p><strong>Kit:</strong> ${order.kit_name}</p>
+        <p><strong>Size:</strong> ${order.size}</p>
+        <p><strong>Quantity:</strong> ${order.quantity}</p>
+        <p><strong>Unit Price:</strong> ₦${order.unit_price.toLocaleString()}</p>
+        ${order.delivery_fee > 0 ? `<p><strong>Delivery Fee:</strong> ₦${order.delivery_fee.toLocaleString()} (Zone ${order.delivery_zone})</p>` : ""}
+        <p><strong>Total Paid:</strong> <strong style="font-size:18px;">₦${order.total_amount.toLocaleString()}</strong></p>
+        <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
+        <p><strong>Lint Reference:</strong> <code>${order.lint_reference || order.payment_reference}</code></p>
+        <p style="color:#777;font-size:12px;">Received: ${new Date().toLocaleString()}</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: process.env.GMAIL_USER,
+      subject: `${order.is_interstate ? "⭐ INTERSTATE — " : ""}New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
+      html,
+    })
+    console.log("PU admin email sent via Gmail")
+  } catch (e) {
+    console.error("PU admin email failed:", e)
   }
 }
 
