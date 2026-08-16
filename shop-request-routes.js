@@ -347,20 +347,28 @@ let lintTokenCache = { token: null, expiresAt: 0 }
 
 async function getLintToken() {
   if (lintTokenCache.token && Date.now() < lintTokenCache.expiresAt) {
+    console.log("Lint: using cached token")
     return lintTokenCache.token
   }
-  const { data } = await axios.post(`${LINT_BASE_URL}/api/partner/v1/oauth/token`, {
-    grant_type: "client_credentials",
-    client_id: process.env.LINT_CLIENT_ID,
-    client_secret: process.env.LINT_CLIENT_SECRET,
-    scope: "",
-  }, { headers: { "Content-Type": "application/json", Accept: "application/json" } })
-
-  lintTokenCache = {
-    token: data.access_token,
-    expiresAt: Date.now() + 55 * 60 * 1000, // refresh 5 minutes before expiry
+  console.log("Lint: fetching token from", `${LINT_BASE_URL}/api/partner/v1/oauth/token`)
+  console.log("Lint: client_id present:", !!process.env.LINT_CLIENT_ID, "| client_secret present:", !!process.env.LINT_CLIENT_SECRET)
+  try {
+    const { data } = await axios.post(`${LINT_BASE_URL}/api/partner/v1/oauth/token`, {
+      grant_type: "client_credentials",
+      client_id: process.env.LINT_CLIENT_ID,
+      client_secret: process.env.LINT_CLIENT_SECRET,
+      scope: "",
+    }, { headers: { "Content-Type": "application/json", Accept: "application/json" } })
+    console.log("Lint: token fetched OK, token_type:", data.token_type, "| expires_in:", data.expires_in)
+    lintTokenCache = {
+      token: data.access_token,
+      expiresAt: Date.now() + 55 * 60 * 1000,
+    }
+    return data.access_token
+  } catch (e) {
+    console.error("Lint: token fetch FAILED:", e.response?.status, JSON.stringify(e.response?.data))
+    throw e
   }
-  return data.access_token
 }
 
 function lintHeaders(token) {
@@ -370,12 +378,14 @@ function lintHeaders(token) {
 // ─── Plateau United Routes ───────────────────────────────────────────────────
 
 const PU_PRICES = {
-  "Home Kit":       10,
-  "Away Kit":       10,
-  "Alternate Kit":  10,
-  "Training Kit":   10,
-  "Hoodie":         10,
-  "Tracksuit":      10,
+  "Home Kit":          10,
+  "Away Kit":          10,
+  "Alternate Kit":     10,
+  "Training Kit I":    10,
+  "Training Kit II":   10,
+  "Training Kit III":  10,
+  "Hoodie":            10,
+  "Tracksuit":         10,
 }
 
 const PU_DELIVERY_FEES = {
@@ -415,19 +425,22 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     // Create Lint virtual account
     const token = await getLintToken()
     const callbackUrl = `${process.env.SERVER_URL || "https://exp-server2-seven.vercel.app"}/api/plateau-united/lint-webhook`
+    const vaPayload = { amount: totalAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
+    console.log("Lint: creating virtual account →", JSON.stringify(vaPayload))
 
-    const { data: lintData } = await axios.post(
-      `${LINT_BASE_URL}/api/partner/v1/payments/virtual-accounts`,
-      {
-        amount: totalAmount * 100, // kobo
-        currency: "NGN",
-        reference,
-        callback_url: callbackUrl,
-        amount_control: "FIXED",
-        validity: 3600,
-      },
-      { headers: lintHeaders(token) }
-    )
+    let lintData
+    try {
+      const res2 = await axios.post(
+        `${LINT_BASE_URL}/api/partner/v1/payments/virtual-accounts`,
+        vaPayload,
+        { headers: lintHeaders(token) }
+      )
+      lintData = res2.data
+      console.log("Lint: virtual account created →", JSON.stringify(lintData))
+    } catch (e) {
+      console.error("Lint: virtual account creation FAILED:", e.response?.status, JSON.stringify(e.response?.data))
+      throw e
+    }
 
     const account = lintData.data
 
