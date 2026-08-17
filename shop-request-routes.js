@@ -378,18 +378,18 @@ function lintHeaders(token) {
 // ─── Plateau United Routes ───────────────────────────────────────────────────
 
 const PU_PRICES = {
-  "Home Kit":          10,
-  "Away Kit":          10,
-  "Alternate Kit":     10,
-  "Training Kit I":    10,
-  "Training Kit II":   10,
-  "Training Kit III":  10,
-  "Hoodie":            10,
-  "Tracksuit":         10,
+  "Home Kit":          15000,
+  "Away Kit":          15000,
+  "Alternate Kit":     15000,
+  "Training Kit I":    17000,
+  "Training Kit II":   17000,
+  "Training Kit III":  17000,
+  "Hoodie":            35000,
+  "Tracksuit":         35000,
 }
 
 const PU_DELIVERY_FEES = {
-  A: 10, B: 10, C: 10, D: 10, E: 10,
+  A: 1500, B: 2000, C: 2500, D: 3000, E: 3750,
   interstate: 0,
 }
 
