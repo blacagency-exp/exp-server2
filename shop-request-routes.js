@@ -350,10 +350,10 @@ async function getLintToken() {
     console.log("Lint: using cached token")
     return lintTokenCache.token
   }
-  console.log("Lint: fetching token from", `${LINT_BASE_URL}/api/partner/v1/oauth/token`)
+  console.log("Lint: fetching token from", `${LINT_BASE_URL}/api/oauth/token`)
   console.log("Lint: client_id present:", !!process.env.LINT_CLIENT_ID, "| client_secret present:", !!process.env.LINT_CLIENT_SECRET)
   try {
-    const { data } = await axios.post(`${LINT_BASE_URL}/api/partner/v1/oauth/token`, {
+    const { data } = await axios.post(`${LINT_BASE_URL}/api/oauth/token`, {
       grant_type: "client_credentials",
       client_id: process.env.LINT_CLIENT_ID,
       client_secret: process.env.LINT_CLIENT_SECRET,
