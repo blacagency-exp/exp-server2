@@ -381,9 +381,9 @@ const PU_PRICES = {
   "Home Kit":          15000,
   "Away Kit":          15000,
   "Alternate Kit":     15000,
-  "Training Kit I":    17000,
-  "Training Kit II":   17000,
-  "Training Kit III":  17000,
+  "Fwavei":            17000,
+  "Farin Gada":        17000,
+  "Terminus":          17000,
   "Hoodie":            35000,
   "Tracksuit":         35000,
 }
