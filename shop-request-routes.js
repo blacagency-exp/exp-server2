@@ -378,9 +378,12 @@ function lintHeaders(token) {
 // ─── Plateau United Routes ───────────────────────────────────────────────────
 
 const PU_PRICES = {
-  "Home Kit":          15000,
-  "Away Kit":          15000,
-  "Alternate Kit":     15000,
+  "Home Kit — Fan":       15000,
+  "Home Kit — Player":    15000,
+  "Away Kit — Fan":       15000,
+  "Away Kit — Player":    15000,
+  "Alternate Kit — Fan":  15000,
+  "Alternate Kit — Player": 15000,
   "Fwavei":            30000,
   "Farin Gada":        30000,
   "Terminus":          30000,
