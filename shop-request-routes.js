@@ -381,9 +381,9 @@ const PU_PRICES = {
   "Home Kit":          15000,
   "Away Kit":          15000,
   "Alternate Kit":     15000,
-  "Fwavei":            17000,
-  "Farin Gada":        17000,
-  "Terminus":          17000,
+  "Fwavei":            30000,
+  "Farin Gada":        30000,
+  "Terminus":          30000,
   "Hoodie":            35000,
   "Tracksuit":         35000,
 }
