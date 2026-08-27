@@ -457,6 +457,8 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
         phone,
         kit_name: kitName,
         size,
+        gender: gender || null,
+        quality: quality || null,
         quantity: qty,
         unit_price: unitPrice,
         delivery_fee: isInterstate ? 0 : zoneFee,
