@@ -378,9 +378,9 @@ function lintHeaders(token) {
 // ─── Plateau United Routes ───────────────────────────────────────────────────
 
 const PU_PRICES = {
-  "Home Kit":          15000,
-  "Away Kit":          15000,
-  "Alternate Kit":     15000,
+  "Home Kit":          { fan: 15000, player: 30000 },
+  "Away Kit":          { fan: 15000, player: 30000 },
+  "Alternate Kit":     { fan: 15000, player: 30000 },
   "Fwavei":            30000,
   "Farin Gada":        30000,
   "Terminus":          30000,
@@ -397,7 +397,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
   try {
     const {
       email, firstName, lastName, phone,
-      kitName, size, quantity,
+      kitName, size, gender, quality, quantity,
       deliveryAddress, deliveryZone, deliveryFee, isInterstate,
     } = req.body
 
@@ -405,7 +405,10 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     if (!PU_PRICES[kitName]) {
       return res.status(400).json({ error: "Invalid kit selected" })
     }
-    const unitPrice = PU_PRICES[kitName]
+    const priceEntry = PU_PRICES[kitName]
+    const unitPrice = typeof priceEntry === "object"
+      ? (quality === "Player grade" ? priceEntry.player : priceEntry.fan)
+      : priceEntry
     const qty = Math.max(1, parseInt(quantity) || 1)
 
     // Server-side delivery fee verification
@@ -454,6 +457,8 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
         phone,
         kit_name: kitName,
         size,
+        gender: gender || null,
+        quality: quality || null,
         quantity: qty,
         unit_price: unitPrice,
         delivery_fee: isInterstate ? 0 : zoneFee,
