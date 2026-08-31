@@ -398,8 +398,11 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     const {
       email, firstName, lastName, phone,
       kitName, size, gender, quality, quantity,
+      fulfillmentType,
       deliveryAddress, deliveryZone, deliveryFee, isInterstate,
     } = req.body
+
+    const isPickup = fulfillmentType === "pickup"
 
     // Server-side price verification
     if (!PU_PRICES[kitName]) {
@@ -412,15 +415,18 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     const qty = Math.max(1, parseInt(quantity) || 1)
 
     // Server-side delivery fee verification
-    const zoneFee = isInterstate ? 0 : (PU_DELIVERY_FEES[deliveryZone] ?? null)
-    if (!isInterstate && zoneFee === null) {
-      return res.status(400).json({ error: "Invalid delivery zone" })
-    }
-    if (!isInterstate && zoneFee !== parseInt(deliveryFee)) {
-      return res.status(400).json({ error: "Delivery fee mismatch" })
+    let zoneFee = 0
+    if (!isPickup) {
+      zoneFee = isInterstate ? 0 : (PU_DELIVERY_FEES[deliveryZone] ?? null)
+      if (!isInterstate && zoneFee === null) {
+        return res.status(400).json({ error: "Invalid delivery zone" })
+      }
+      if (!isInterstate && zoneFee !== parseInt(deliveryFee)) {
+        return res.status(400).json({ error: "Delivery fee mismatch" })
+      }
     }
 
-    const totalAmount = unitPrice * qty + (isInterstate ? 0 : zoneFee)
+    const totalAmount = unitPrice * qty + (isPickup ? 0 : (isInterstate ? 0 : zoneFee))
 
     // Generate a unique reference
     const reference = `PU-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -461,10 +467,11 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
         quality: quality || null,
         quantity: qty,
         unit_price: unitPrice,
-        delivery_fee: isInterstate ? 0 : zoneFee,
-        delivery_zone: isInterstate ? "interstate" : deliveryZone,
-        delivery_address: deliveryAddress,
-        is_interstate: !!isInterstate,
+        fulfillment_type: isPickup ? "pickup" : "delivery",
+        delivery_fee: isPickup ? 0 : (isInterstate ? 0 : zoneFee),
+        delivery_zone: isPickup ? null : (isInterstate ? "interstate" : deliveryZone),
+        delivery_address: isPickup ? null : deliveryAddress,
+        is_interstate: isPickup ? false : !!isInterstate,
         total_amount: totalAmount,
         payment_reference: account.id,   // Lint virtual account UUID
         lint_reference: reference,        // our generated reference string
@@ -555,9 +562,13 @@ router.post("/plateau-united/lint-webhook", async (req, res) => {
 })
 
 async function sendPUCustomerEmail(order) {
-  const deliveryNote = order.is_interstate
-    ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;border-radius:6px;"><strong>⭐ Manual Dispatch</strong> — Our team will contact you on WhatsApp (${order.phone}) to arrange interstate delivery.</p>`
-    : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — expect delivery within 1–3 business days via Bamjiye.</p>`
+  const isPickup = order.fulfillment_type === "pickup"
+
+  const fulfillmentNote = isPickup
+    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:6px;"><strong>🏟 Pickup Order</strong> — Our team will contact you on WhatsApp (${order.phone}) with the pickup address and timing. No delivery fee applies.</p>`
+    : order.is_interstate
+      ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;border-radius:6px;"><strong>⭐ Manual Dispatch</strong> — Our team will contact you on WhatsApp (${order.phone}) to arrange interstate delivery.</p>`
+      : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — expect delivery within 1–3 business days via Bamjiye.</p>`
 
   const html = `
     <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
@@ -579,17 +590,17 @@ async function sendPUCustomerEmail(order) {
             <td style="padding:10px;border-bottom:1px solid #eee;">Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;">₦${order.unit_price.toLocaleString()}</td>
           </tr>
-          ${order.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${order.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${order.delivery_fee.toLocaleString()}</td></tr>` : ""}
+          ${!isPickup && order.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${order.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${order.delivery_fee.toLocaleString()}</td></tr>` : ""}
           <tr style="background:#f8f8f8;">
             <td style="padding:10px;" colspan="2"><strong>Total Paid</strong></td>
             <td style="padding:10px;"><strong>₦${order.total_amount.toLocaleString()}</strong></td>
           </tr>
         </table>
-        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
-        ${deliveryNote}
+        ${!isPickup && order.delivery_address ? `<p><strong>Delivery Address:</strong> ${order.delivery_address}</p>` : ""}
+        ${fulfillmentNote}
         <p><strong>Reference:</strong> <code>${order.lint_reference || order.payment_reference}</code></p>
         <p style="margin-top:24px;color:#555;">For enquiries contact <a href="mailto:Plateauunitedsales@gmail.com">Plateauunitedsales@gmail.com</a> or reply to this email.</p>
-        <p style="margin-top:8px;font-size:11px;color:#999;">Delivered by Bamjiye Logistics · Official merchandise by Galaxy × Experience Plateau × Plateau United FC</p>
+        <p style="margin-top:8px;font-size:11px;color:#999;">Official merchandise by Galaxy × Experience Plateau × Plateau United FC</p>
       </div>
     </div>
     </body></html>
@@ -608,9 +619,13 @@ async function sendPUCustomerEmail(order) {
 }
 
 async function sendPUAdminEmail(order) {
-  const dispatchFlag = order.is_interstate
-    ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;"><strong>⭐ INTERSTATE ORDER — Manual dispatch required.</strong> Contact customer on WhatsApp: ${order.phone}</p>`
-    : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — Bamjiye</p>`
+  const isPickup = order.fulfillment_type === "pickup"
+
+  const dispatchFlag = isPickup
+    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;"><strong>🏟 PICKUP ORDER</strong> — Customer will collect. Contact on WhatsApp: ${order.phone}</p>`
+    : order.is_interstate
+      ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;"><strong>⭐ INTERSTATE ORDER — Manual dispatch required.</strong> Contact customer on WhatsApp: ${order.phone}</p>`
+      : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — Bamjiye</p>`
 
   const html = `
     <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
@@ -629,10 +644,10 @@ async function sendPUAdminEmail(order) {
         <p><strong>Size:</strong> ${order.size}</p>
         <p><strong>Quantity:</strong> ${order.quantity}</p>
         <p><strong>Unit Price:</strong> ₦${order.unit_price.toLocaleString()}</p>
-        ${order.delivery_fee > 0 ? `<p><strong>Delivery Fee:</strong> ₦${order.delivery_fee.toLocaleString()} (Zone ${order.delivery_zone})</p>` : ""}
+        ${!isPickup && order.delivery_fee > 0 ? `<p><strong>Delivery Fee:</strong> ₦${order.delivery_fee.toLocaleString()} (Zone ${order.delivery_zone})</p>` : ""}
         <p><strong>Total Paid:</strong> <strong style="font-size:18px;">₦${order.total_amount.toLocaleString()}</strong></p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
-        <p><strong>Delivery Address:</strong> ${order.delivery_address}</p>
+        ${!isPickup && order.delivery_address ? `<p><strong>Delivery Address:</strong> ${order.delivery_address}</p>` : `<p><strong>Fulfillment:</strong> Pickup</p>`}
         <p><strong>Lint Reference:</strong> <code>${order.lint_reference || order.payment_reference}</code></p>
         <p style="color:#777;font-size:12px;">Received: ${new Date().toLocaleString()}</p>
       </div>
@@ -643,7 +658,7 @@ async function sendPUAdminEmail(order) {
     await gmailTransporter.sendMail({
       from: `"Plateau United" <${process.env.GMAIL_USER}>`,
       to: process.env.GMAIL_USER,
-      subject: `${order.is_interstate ? "⭐ INTERSTATE — " : ""}New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
+      subject: `${isPickup ? "🏟 PICKUP — " : order.is_interstate ? "⭐ INTERSTATE — " : ""}New PU Order — ${order.first_name} ${order.last_name} (${order.kit_name})`,
       html,
     })
     console.log("PU admin email sent via Gmail")
