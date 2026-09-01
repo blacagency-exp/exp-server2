@@ -587,7 +587,11 @@ async function sendPUCustomerEmail(order) {
           </tr>
           <tr>
             <td style="padding:10px;border-bottom:1px solid #eee;"><strong>${order.kit_name}</strong></td>
-            <td style="padding:10px;border-bottom:1px solid #eee;">Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}</td>
+            <td style="padding:10px;border-bottom:1px solid #eee;">
+              Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}
+              ${order.gender ? ` &nbsp;|&nbsp; Gender: ${order.gender}` : ""}
+              ${order.quality ? ` &nbsp;|&nbsp; Grade: ${order.quality}` : ""}
+            </td>
             <td style="padding:10px;border-bottom:1px solid #eee;">₦${order.unit_price.toLocaleString()}</td>
           </tr>
           ${!isPickup && order.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${order.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${order.delivery_fee.toLocaleString()}</td></tr>` : ""}
@@ -642,6 +646,8 @@ async function sendPUAdminEmail(order) {
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
         <p><strong>Kit:</strong> ${order.kit_name}</p>
         <p><strong>Size:</strong> ${order.size}</p>
+        ${order.gender ? `<p><strong>Gender:</strong> ${order.gender}</p>` : ""}
+        ${order.quality ? `<p><strong>Grade:</strong> ${order.quality}</p>` : ""}
         <p><strong>Quantity:</strong> ${order.quantity}</p>
         <p><strong>Unit Price:</strong> ₦${order.unit_price.toLocaleString()}</p>
         ${!isPickup && order.delivery_fee > 0 ? `<p><strong>Delivery Fee:</strong> ₦${order.delivery_fee.toLocaleString()} (Zone ${order.delivery_zone})</p>` : ""}
