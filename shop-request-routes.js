@@ -491,6 +491,112 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
   }
 })
 
+// Cart payment — multiple items in one Lint virtual account
+router.post("/plateau-united/initialize-cart-payment", async (req, res) => {
+  try {
+    const {
+      email, firstName, lastName, phone,
+      items,
+      fulfillmentType,
+      deliveryAddress, deliveryZone, deliveryFee, isInterstate,
+    } = req.body
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Cart is empty" })
+    }
+
+    const isPickup = fulfillmentType === "pickup"
+
+    // Validate and price each item
+    let subtotal = 0
+    const validatedItems = []
+    for (const item of items) {
+      const priceEntry = PU_PRICES[item.kitName]
+      if (!priceEntry) return res.status(400).json({ error: `Invalid product: ${item.kitName}` })
+      const unitPrice = typeof priceEntry === "object"
+        ? (item.quality === "Player grade" ? priceEntry.player : priceEntry.fan)
+        : priceEntry
+      const qty = Math.max(1, parseInt(item.quantity) || 1)
+      subtotal += unitPrice * qty
+      validatedItems.push({ ...item, unitPrice, quantity: qty })
+    }
+
+    // Delivery fee verification
+    let zoneFee = 0
+    if (!isPickup) {
+      zoneFee = isInterstate ? 0 : (PU_DELIVERY_FEES[deliveryZone] ?? null)
+      if (!isInterstate && zoneFee === null) {
+        return res.status(400).json({ error: "Invalid delivery zone" })
+      }
+      if (!isInterstate && zoneFee !== parseInt(deliveryFee)) {
+        return res.status(400).json({ error: "Delivery fee mismatch" })
+      }
+    }
+
+    const totalAmount = subtotal + (isPickup ? 0 : (isInterstate ? 0 : zoneFee))
+
+    const reference = `PU-CART-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+
+    // Create one Lint virtual account for the whole cart
+    const token = await getLintToken()
+    const callbackUrl = `${process.env.SERVER_URL || "https://exp-server2-seven.vercel.app"}/api/plateau-united/lint-webhook`
+    const vaPayload = { amount: totalAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
+    console.log("Lint: creating cart virtual account →", JSON.stringify(vaPayload))
+
+    let lintData
+    try {
+      const res2 = await axios.post(
+        `${LINT_BASE_URL}/api/partner/v1/payments/virtual-accounts`,
+        vaPayload,
+        { headers: lintHeaders(token) }
+      )
+      lintData = res2.data
+      console.log("Lint: cart virtual account created →", JSON.stringify(lintData))
+    } catch (e) {
+      console.error("Lint: cart virtual account creation FAILED:", e.response?.status, JSON.stringify(e.response?.data))
+      throw e
+    }
+
+    const account = lintData.data
+
+    // Insert one row per cart item, all sharing the same payment_reference
+    const sharedFields = {
+      email, first_name: firstName, last_name: lastName, phone,
+      fulfillment_type: isPickup ? "pickup" : "delivery",
+      delivery_fee: isPickup ? 0 : (isInterstate ? 0 : zoneFee),
+      delivery_zone: isPickup ? null : (isInterstate ? "interstate" : deliveryZone),
+      delivery_address: isPickup ? null : deliveryAddress,
+      is_interstate: isPickup ? false : !!isInterstate,
+      total_amount: totalAmount,
+      payment_reference: account.id,
+      lint_reference: reference,
+      payment_status: "pending",
+    }
+
+    const rows = validatedItems.map(item => ({
+      ...sharedFields,
+      kit_name: item.kitName,
+      size: item.size,
+      gender: item.gender || null,
+      quality: item.quality || null,
+      quantity: item.quantity,
+      unit_price: item.unitPrice,
+    }))
+
+    const { error: supabaseError } = await supabase.from("plateau_united_orders").insert(rows)
+    if (supabaseError) {
+      console.error("Supabase PU cart insert failed:", supabaseError)
+      return res.status(500).json({ error: "Failed to record cart order", details: supabaseError.message })
+    }
+
+    res.json({ data: account })
+  } catch (error) {
+    const detail = error.response?.data || error.message
+    console.error("PU cart payment init failed:", detail)
+    res.status(500).json({ error: "Failed to initialize cart payment", details: detail })
+  }
+})
+
 // Poll payment status (called by frontend "I've made the transfer" button)
 router.get("/plateau-united/verify-payment/:accountId", async (req, res) => {
   try {
@@ -507,16 +613,20 @@ router.get("/plateau-united/verify-payment/:accountId", async (req, res) => {
 
     // Update order only when status changes to terminal state
     if (lintStatus === "SUCCESSFUL" || lintStatus === "FAILED") {
-      const { data: order, error: updateError } = await supabase
+      const { data: orders, error: updateError } = await supabase
         .from("plateau_united_orders")
         .update({ payment_status: dbStatus })
         .eq("payment_reference", accountId)
         .select()
-        .single()
 
-      if (!updateError && order && lintStatus === "SUCCESSFUL") {
-        await sendPUCustomerEmail(order)
-        await sendPUAdminEmail(order)
+      if (!updateError && orders && orders.length > 0 && lintStatus === "SUCCESSFUL") {
+        if (orders.length === 1) {
+          await sendPUCustomerEmail(orders[0])
+          await sendPUAdminEmail(orders[0])
+        } else {
+          await sendPUCartCustomerEmail(orders)
+          await sendPUCartAdminEmail(orders)
+        }
       }
     }
 
@@ -539,18 +649,23 @@ router.post("/plateau-united/lint-webhook", async (req, res) => {
     const accountId = event?.id || event?.data?.id
 
     if (lintStatus === "SUCCESSFUL" && accountId) {
-      const { data: order, error } = await supabase
+      const { data: orders, error } = await supabase
         .from("plateau_united_orders")
         .update({ payment_status: "completed" })
         .eq("payment_reference", accountId)
         .eq("payment_status", "pending") // idempotency guard
         .select()
-        .single()
 
-      if (!error && order) {
-        await sendPUCustomerEmail(order)
-        await sendPUAdminEmail(order)
-        console.log("PU webhook: order fulfilled for", order.email)
+      if (!error && orders && orders.length > 0) {
+        if (orders.length === 1) {
+          await sendPUCustomerEmail(orders[0])
+          await sendPUAdminEmail(orders[0])
+          console.log("PU webhook: order fulfilled for", orders[0].email)
+        } else {
+          await sendPUCartCustomerEmail(orders)
+          await sendPUCartAdminEmail(orders)
+          console.log("PU webhook: cart order fulfilled for", orders[0].email, `(${orders.length} items)`)
+        }
       }
     }
 
@@ -670,6 +785,138 @@ async function sendPUAdminEmail(order) {
     console.log("PU admin email sent via Gmail")
   } catch (e) {
     console.error("PU admin email failed:", e)
+  }
+}
+
+async function sendPUCartCustomerEmail(orders) {
+  const first = orders[0]
+  const isPickup = first.fulfillment_type === "pickup"
+
+  const itemRows = orders.map(o => `
+    <tr>
+      <td style="padding:10px;border-bottom:1px solid #eee;"><strong>${o.kit_name}</strong></td>
+      <td style="padding:10px;border-bottom:1px solid #eee;">
+        Size: ${o.size} | Qty: ${o.quantity}
+        ${o.gender ? ` | Gender: ${o.gender}` : ""}
+        ${o.quality ? ` | Grade: ${o.quality}` : ""}
+      </td>
+      <td style="padding:10px;border-bottom:1px solid #eee;">₦${(o.unit_price * o.quantity).toLocaleString()}</td>
+    </tr>`).join("")
+
+  const fulfillmentNote = isPickup
+    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:6px;"><strong>🏟 Pickup Order</strong> — Please collect at: <strong>No. 6, Amazing Grace House, Shok Bature Street, off Peter Gyang Sha Road, from Rayfield Golf Club, Rayfield, Jos.</strong> We'll confirm timing via WhatsApp (${first.phone}).</p>`
+    : first.is_interstate
+      ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;border-radius:6px;"><strong>⭐ Manual Dispatch</strong> — Our team will contact you on WhatsApp (${first.phone}) to arrange interstate delivery.</p>`
+      : `<p><strong>Delivery Zone:</strong> Zone ${first.delivery_zone} — expect delivery within 1–3 business days via Bamjiye.</p>`
+
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:600px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#1A6B2C;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">Cart Order Confirmed!</h1>
+        <p style="color:#fff;margin:8px 0 0;">Plateau United Official Merchandise</p>
+      </div>
+      <div style="padding:24px;">
+        <p>Hi ${first.first_name}, your order has been confirmed and payment received.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr style="background:#f8f8f8;">
+            <th style="padding:10px;text-align:left;">Item</th>
+            <th style="padding:10px;text-align:left;">Details</th>
+            <th style="padding:10px;text-align:left;">Amount</th>
+          </tr>
+          ${itemRows}
+          ${!isPickup && first.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${first.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${first.delivery_fee.toLocaleString()}</td></tr>` : ""}
+          <tr style="background:#f8f8f8;">
+            <td style="padding:10px;" colspan="2"><strong>Total Paid</strong></td>
+            <td style="padding:10px;"><strong>₦${first.total_amount.toLocaleString()}</strong></td>
+          </tr>
+        </table>
+        ${!isPickup && first.delivery_address ? `<p><strong>Delivery Address:</strong> ${first.delivery_address}</p>` : ""}
+        ${fulfillmentNote}
+        <p><strong>Reference:</strong> <code>${first.lint_reference || first.payment_reference}</code></p>
+        <p style="margin-top:24px;color:#555;">For enquiries contact <a href="mailto:Plateauunitedsales@gmail.com">Plateauunitedsales@gmail.com</a> or reply to this email.</p>
+        <p style="margin-top:8px;font-size:11px;color:#999;">Official merchandise by Galaxy × Experience Plateau × Plateau United FC</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: first.email,
+      subject: `Your Plateau United Cart Order (${orders.length} items) is Confirmed!`,
+      html,
+    })
+    console.log("PU cart customer email sent via Gmail to", first.email)
+  } catch (e) {
+    console.error("PU cart customer email failed:", e)
+  }
+}
+
+async function sendPUCartAdminEmail(orders) {
+  const first = orders[0]
+  const isPickup = first.fulfillment_type === "pickup"
+
+  const dispatchFlag = isPickup
+    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;"><strong>🏟 PICKUP ORDER</strong> — Customer will collect. Contact on WhatsApp: ${first.phone}</p>`
+    : first.is_interstate
+      ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;"><strong>⭐ INTERSTATE ORDER — Manual dispatch required.</strong> Contact on WhatsApp: ${first.phone}</p>`
+      : `<p><strong>Delivery Zone:</strong> Zone ${first.delivery_zone} — Bamjiye</p>`
+
+  const itemRows = orders.map(o => `
+    <tr>
+      <td style="padding:8px;border-bottom:1px solid #eee;">${o.kit_name}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">${o.size}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">${o.gender || "—"}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">${o.quality || "—"}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">${o.quantity}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">₦${(o.unit_price * o.quantity).toLocaleString()}</td>
+    </tr>`).join("")
+
+  const html = `
+    <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;">
+    <div style="max-width:620px;margin:0 auto;border:1px solid #eee;border-radius:10px;overflow:hidden;">
+      <div style="background:#141E03;padding:24px;text-align:center;">
+        <h1 style="color:#F7D000;margin:0;">New Cart Order — ${orders.length} Items</h1>
+        <p style="color:#aaa;margin:4px 0 0;">Payment Confirmed via Lint</p>
+      </div>
+      <div style="padding:24px;">
+        ${dispatchFlag}
+        <p><strong>Customer:</strong> ${first.first_name} ${first.last_name}</p>
+        <p><strong>Email:</strong> ${first.email}</p>
+        <p><strong>Phone / WhatsApp:</strong> ${first.phone}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <tr style="background:#f8f8f8;">
+            <th style="padding:8px;text-align:left;">Kit</th>
+            <th style="padding:8px;text-align:left;">Size</th>
+            <th style="padding:8px;text-align:left;">Gender</th>
+            <th style="padding:8px;text-align:left;">Grade</th>
+            <th style="padding:8px;text-align:left;">Qty</th>
+            <th style="padding:8px;text-align:left;">Amount</th>
+          </tr>
+          ${itemRows}
+        </table>
+        ${!isPickup && first.delivery_fee > 0 ? `<p style="margin-top:12px;"><strong>Delivery Fee:</strong> ₦${first.delivery_fee.toLocaleString()} (Zone ${first.delivery_zone})</p>` : ""}
+        <p><strong>Total Paid:</strong> <strong style="font-size:18px;">₦${first.total_amount.toLocaleString()}</strong></p>
+        <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+        ${!isPickup && first.delivery_address ? `<p><strong>Delivery Address:</strong> ${first.delivery_address}</p>` : `<p><strong>Fulfillment:</strong> Pickup</p>`}
+        <p><strong>Lint Reference:</strong> <code>${first.lint_reference || first.payment_reference}</code></p>
+        <p style="color:#777;font-size:12px;">Received: ${new Date().toLocaleString()}</p>
+      </div>
+    </div>
+    </body></html>
+  `
+  try {
+    await gmailTransporter.sendMail({
+      from: `"Plateau United" <${process.env.GMAIL_USER}>`,
+      to: process.env.GMAIL_USER,
+      subject: `${isPickup ? "🏟 PICKUP — " : first.is_interstate ? "⭐ INTERSTATE — " : ""}New PU Cart Order (${orders.length} items) — ${first.first_name} ${first.last_name}`,
+      html,
+    })
+    console.log("PU cart admin email sent via Gmail")
+  } catch (e) {
+    console.error("PU cart admin email failed:", e)
   }
 }
 
