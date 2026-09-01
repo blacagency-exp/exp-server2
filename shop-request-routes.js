@@ -565,7 +565,7 @@ async function sendPUCustomerEmail(order) {
   const isPickup = order.fulfillment_type === "pickup"
 
   const fulfillmentNote = isPickup
-    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:6px;"><strong>🏟 Pickup Order</strong> — Our team will contact you on WhatsApp (${order.phone}) with the pickup address and timing. No delivery fee applies.</p>`
+    ? `<p style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:6px;"><strong>🏟 Pickup Order</strong> — Please collect your order at: <strong>No. 6, Amazing Grace House, Shok Bature Street, off Peter Gyang Sha Road, from Rayfield Golf Club, Rayfield, Jos.</strong> Our team will confirm pickup timing via WhatsApp (${order.phone}).</p>`
     : order.is_interstate
       ? `<p style="background:#fff8e1;border:1px solid #ffe082;padding:12px;border-radius:6px;"><strong>⭐ Manual Dispatch</strong> — Our team will contact you on WhatsApp (${order.phone}) to arrange interstate delivery.</p>`
       : `<p><strong>Delivery Zone:</strong> Zone ${order.delivery_zone} — expect delivery within 1–3 business days via Bamjiye.</p>`
