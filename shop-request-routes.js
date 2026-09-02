@@ -378,14 +378,14 @@ function lintHeaders(token) {
 // ─── Plateau United Routes ───────────────────────────────────────────────────
 
 const PU_PRICES = {
-  "Home Kit":          { fan: 15000, player: 30000 },
-  "Away Kit":          { fan: 15000, player: 30000 },
-  "Alternate Kit":     { fan: 15000, player: 30000 },
-  "Fwavei":            30000,
-  "Farin Gada":        30000,
-  "Terminus":          30000,
-  "Hoodie":            35000,
-  "Tracksuit":         35000,
+  "Home Kit":          { fan: 10, player: 10 },
+  "Away Kit":          { fan: 10, player: 10 },
+  "Alternate Kit":     { fan: 10, player: 10 },
+  "Fwavei":            10,
+  "Farin Gada":        10,
+  "Terminus":          10,
+  "Hoodie":            10,
+  "Tracksuit":         10,
 }
 
 const PU_DELIVERY_FEES = {
