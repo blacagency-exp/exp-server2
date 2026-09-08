@@ -398,6 +398,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     const {
       email, firstName, lastName, phone,
       kitName, size, gender, quality, quantity,
+      sizeMeasurements,
       fulfillmentType,
       deliveryAddress, deliveryZone, deliveryFee, isInterstate,
     } = req.body
@@ -465,6 +466,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
         size,
         gender: gender || null,
         quality: quality || null,
+        size_measurements: sizeMeasurements || null,
         quantity: qty,
         unit_price: unitPrice,
         fulfillment_type: isPickup ? "pickup" : "delivery",
@@ -579,6 +581,7 @@ router.post("/plateau-united/initialize-cart-payment", async (req, res) => {
       size: item.size,
       gender: item.gender || null,
       quality: item.quality || null,
+      size_measurements: item.sizeMeasurements || null,
       quantity: item.quantity,
       unit_price: item.unitPrice,
     }))
@@ -706,6 +709,7 @@ async function sendPUCustomerEmail(order) {
               Size: ${order.size} &nbsp;|&nbsp; Qty: ${order.quantity}
               ${order.gender ? ` &nbsp;|&nbsp; Gender: ${order.gender}` : ""}
               ${order.quality ? ` &nbsp;|&nbsp; Grade: ${order.quality}` : ""}
+              ${order.size_measurements ? `<br/><span style="font-size:11px;color:#888;">${order.size_measurements}</span>` : ""}
             </td>
             <td style="padding:10px;border-bottom:1px solid #eee;">₦${order.unit_price.toLocaleString()}</td>
           </tr>
@@ -760,7 +764,7 @@ async function sendPUAdminEmail(order) {
         <p><strong>Phone / WhatsApp:</strong> ${order.phone}</p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
         <p><strong>Kit:</strong> ${order.kit_name}</p>
-        <p><strong>Size:</strong> ${order.size}</p>
+        <p><strong>Size:</strong> ${order.size}${order.size_measurements ? ` <span style="color:#888;font-size:12px;">(${order.size_measurements})</span>` : ""}</p>
         ${order.gender ? `<p><strong>Gender:</strong> ${order.gender}</p>` : ""}
         ${order.quality ? `<p><strong>Grade:</strong> ${order.quality}</p>` : ""}
         <p><strong>Quantity:</strong> ${order.quantity}</p>
@@ -799,6 +803,7 @@ async function sendPUCartCustomerEmail(orders) {
         Size: ${o.size} | Qty: ${o.quantity}
         ${o.gender ? ` | Gender: ${o.gender}` : ""}
         ${o.quality ? ` | Grade: ${o.quality}` : ""}
+        ${o.size_measurements ? `<br/><span style="font-size:11px;color:#888;">${o.size_measurements}</span>` : ""}
       </td>
       <td style="padding:10px;border-bottom:1px solid #eee;">₦${(o.unit_price * o.quantity).toLocaleString()}</td>
     </tr>`).join("")
@@ -869,6 +874,10 @@ async function sendPUCartAdminEmail(orders) {
       <td style="padding:8px;border-bottom:1px solid #eee;">${o.size}</td>
       <td style="padding:8px;border-bottom:1px solid #eee;">${o.gender || "—"}</td>
       <td style="padding:8px;border-bottom:1px solid #eee;">${o.quality || "—"}</td>
+      <td style="padding:8px;border-bottom:1px solid #eee;">
+        ${o.size}
+        ${o.size_measurements ? `<br/><span style="font-size:10px;color:#999;">${o.size_measurements}</span>` : ""}
+      </td>
       <td style="padding:8px;border-bottom:1px solid #eee;">${o.quantity}</td>
       <td style="padding:8px;border-bottom:1px solid #eee;">₦${(o.unit_price * o.quantity).toLocaleString()}</td>
     </tr>`).join("")
@@ -889,9 +898,9 @@ async function sendPUCartAdminEmail(orders) {
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
           <tr style="background:#f8f8f8;">
             <th style="padding:8px;text-align:left;">Kit</th>
-            <th style="padding:8px;text-align:left;">Size</th>
             <th style="padding:8px;text-align:left;">Gender</th>
             <th style="padding:8px;text-align:left;">Grade</th>
+            <th style="padding:8px;text-align:left;">Size & Measurements</th>
             <th style="padding:8px;text-align:left;">Qty</th>
             <th style="padding:8px;text-align:left;">Amount</th>
           </tr>
