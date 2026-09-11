@@ -341,6 +341,15 @@ async function sendShopOrderAdminEmail(paymentData) {
 // ─── Lint Payment Integration ─────────────────────────────────────────────────
 
 const LINT_BASE_URL = process.env.LINT_BASE_URL || "https://develop.lint.finance"
+const LINT_FEE_RATE = 0.01  // Lint deducts ~1% as processing surcharge
+const LINT_FEE_CAP = 300    // capped at ₦300 per transaction
+
+// Returns the gross amount the customer must pay so the seller receives netAmount after Lint fee
+function computeGross(netAmount) {
+  const grossUncapped = Math.ceil(netAmount / (1 - LINT_FEE_RATE))
+  if (grossUncapped - netAmount > LINT_FEE_CAP) return netAmount + LINT_FEE_CAP
+  return grossUncapped
+}
 
 // In-memory token cache — survives across requests within one server instance
 let lintTokenCache = { token: null, expiresAt: 0 }
@@ -428,6 +437,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     }
 
     const totalAmount = unitPrice * qty + (isPickup ? 0 : (isInterstate ? 0 : zoneFee))
+    const grossAmount = computeGross(totalAmount)
 
     // Generate a unique reference
     const reference = `PU-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -435,7 +445,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
     // Create Lint virtual account
     const token = await getLintToken()
     const callbackUrl = `${process.env.SERVER_URL || "https://exp-server2-seven.vercel.app"}/api/plateau-united/lint-webhook`
-    const vaPayload = { amount: totalAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
+    const vaPayload = { amount: grossAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
     console.log("Lint: creating virtual account →", JSON.stringify(vaPayload))
 
     let lintData
@@ -474,7 +484,7 @@ router.post("/plateau-united/initialize-payment", async (req, res) => {
         delivery_zone: isPickup ? null : (isInterstate ? "interstate" : deliveryZone),
         delivery_address: isPickup ? null : deliveryAddress,
         is_interstate: isPickup ? false : !!isInterstate,
-        total_amount: totalAmount,
+        total_amount: grossAmount,
         payment_reference: account.id,   // Lint virtual account UUID
         lint_reference: reference,        // our generated reference string
         payment_status: "pending",
@@ -536,13 +546,14 @@ router.post("/plateau-united/initialize-cart-payment", async (req, res) => {
     }
 
     const totalAmount = subtotal + (isPickup ? 0 : (isInterstate ? 0 : zoneFee))
+    const grossAmount = computeGross(totalAmount)
 
     const reference = `PU-CART-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
     // Create one Lint virtual account for the whole cart
     const token = await getLintToken()
     const callbackUrl = `${process.env.SERVER_URL || "https://exp-server2-seven.vercel.app"}/api/plateau-united/lint-webhook`
-    const vaPayload = { amount: totalAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
+    const vaPayload = { amount: grossAmount * 100, currency: "NGN", reference, callback_url: callbackUrl, amount_control: "FIXED", validity: 3600 }
     console.log("Lint: creating cart virtual account →", JSON.stringify(vaPayload))
 
     let lintData
@@ -569,7 +580,7 @@ router.post("/plateau-united/initialize-cart-payment", async (req, res) => {
       delivery_zone: isPickup ? null : (isInterstate ? "interstate" : deliveryZone),
       delivery_address: isPickup ? null : deliveryAddress,
       is_interstate: isPickup ? false : !!isInterstate,
-      total_amount: totalAmount,
+      total_amount: grossAmount,
       payment_reference: account.id,
       lint_reference: reference,
       payment_status: "pending",
@@ -714,6 +725,10 @@ async function sendPUCustomerEmail(order) {
             <td style="padding:10px;border-bottom:1px solid #eee;">₦${order.unit_price.toLocaleString()}</td>
           </tr>
           ${!isPickup && order.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${order.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${order.delivery_fee.toLocaleString()}</td></tr>` : ""}
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #eee;color:#888;" colspan="2">Processing fee (1%)</td>
+            <td style="padding:10px;border-bottom:1px solid #eee;color:#888;">+₦${(order.total_amount - order.unit_price * order.quantity - (order.delivery_fee || 0)).toLocaleString()}</td>
+          </tr>
           <tr style="background:#f8f8f8;">
             <td style="padding:10px;" colspan="2"><strong>Total Paid</strong></td>
             <td style="padding:10px;"><strong>₦${order.total_amount.toLocaleString()}</strong></td>
@@ -770,6 +785,7 @@ async function sendPUAdminEmail(order) {
         <p><strong>Quantity:</strong> ${order.quantity}</p>
         <p><strong>Unit Price:</strong> ₦${order.unit_price.toLocaleString()}</p>
         ${!isPickup && order.delivery_fee > 0 ? `<p><strong>Delivery Fee:</strong> ₦${order.delivery_fee.toLocaleString()} (Zone ${order.delivery_zone})</p>` : ""}
+        <p style="color:#888;font-size:12px;"><strong>Processing Fee (1%):</strong> ₦${(order.total_amount - order.unit_price * order.quantity - (order.delivery_fee || 0)).toLocaleString()}</p>
         <p><strong>Total Paid:</strong> <strong style="font-size:18px;">₦${order.total_amount.toLocaleString()}</strong></p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
         ${!isPickup && order.delivery_address ? `<p><strong>Delivery Address:</strong> ${order.delivery_address}</p>` : `<p><strong>Fulfillment:</strong> Pickup</p>`}
@@ -831,6 +847,10 @@ async function sendPUCartCustomerEmail(orders) {
           </tr>
           ${itemRows}
           ${!isPickup && first.delivery_fee > 0 ? `<tr><td style="padding:10px;border-bottom:1px solid #eee;">Delivery (Zone ${first.delivery_zone})</td><td></td><td style="padding:10px;border-bottom:1px solid #eee;">₦${first.delivery_fee.toLocaleString()}</td></tr>` : ""}
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #eee;color:#888;" colspan="2">Processing fee (1%)</td>
+            <td style="padding:10px;border-bottom:1px solid #eee;color:#888;">+₦${(first.total_amount - orders.reduce((s, o) => s + o.unit_price * o.quantity, 0) - (first.delivery_fee || 0)).toLocaleString()}</td>
+          </tr>
           <tr style="background:#f8f8f8;">
             <td style="padding:10px;" colspan="2"><strong>Total Paid</strong></td>
             <td style="padding:10px;"><strong>₦${first.total_amount.toLocaleString()}</strong></td>
@@ -907,6 +927,7 @@ async function sendPUCartAdminEmail(orders) {
           ${itemRows}
         </table>
         ${!isPickup && first.delivery_fee > 0 ? `<p style="margin-top:12px;"><strong>Delivery Fee:</strong> ₦${first.delivery_fee.toLocaleString()} (Zone ${first.delivery_zone})</p>` : ""}
+        <p style="color:#888;font-size:12px;"><strong>Processing Fee (1%):</strong> ₦${(first.total_amount - orders.reduce((s, o) => s + o.unit_price * o.quantity, 0) - (first.delivery_fee || 0)).toLocaleString()}</p>
         <p><strong>Total Paid:</strong> <strong style="font-size:18px;">₦${first.total_amount.toLocaleString()}</strong></p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
         ${!isPickup && first.delivery_address ? `<p><strong>Delivery Address:</strong> ${first.delivery_address}</p>` : `<p><strong>Fulfillment:</strong> Pickup</p>`}
